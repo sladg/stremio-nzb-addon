@@ -1,7 +1,7 @@
 import { getRouter } from "@stremio-addon/node-express";
 import { addonInterface } from "./addon.js";
 import express from "express";
-import { landingTemplate } from "@stremio-addon/compat";
+import { landingTemplate } from "./configure.js";
 import { manifest } from "./manifest.js";
 
 const app = express();
