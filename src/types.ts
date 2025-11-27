@@ -1,6 +1,7 @@
 export interface AddonConfig {
   indexerUrl: string;
   indexerApiKey: string;
+  nttpServers: string;
 };
 
 export interface RSS {

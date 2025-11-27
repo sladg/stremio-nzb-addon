@@ -2,10 +2,11 @@ import { AddonBuilder, MetaPreview, Stream } from "@stremio-addon/sdk";
 import { catalog, manifest } from "./manifest.js";
 import { AddonConfig } from "./types.js";
 import { NZBWebApi } from "./nzb-api.js";
+import { getNttpServers } from "./utils.js";
 
 const builder = new AddonBuilder(manifest);
 
-builder.defineStreamHandler<AddonConfig>(async ({config, extra, id, type}) => {
+builder.defineStreamHandler<AddonConfig>(async ({config, id, type}) => {
   try {
     const imdbid = id.replace("tt", "");
 
@@ -21,6 +22,7 @@ builder.defineStreamHandler<AddonConfig>(async ({config, extra, id, type}) => {
       description: `${item.title}\n${item.category}`,
       name: `NZB`,
       nzbUrl: item.enclosure["@attributes"].url,
+      servers: getNttpServers(config.nttpServers),
     }));
 
     console.log(`Found ${streams.length} streams`);
@@ -33,17 +35,15 @@ builder.defineStreamHandler<AddonConfig>(async ({config, extra, id, type}) => {
 });
 
 
-builder.defineCatalogHandler<AddonConfig>(async ({config, extra, id, type}) => {
+builder.defineCatalogHandler<AddonConfig>(async ({config, extra: {search}}) => {
    try {
-    const searchQuery = extra.search;
-
-    if (searchQuery == null || searchQuery.trim() === "") {
+    if (search == null || search.trim() === "") {
       console.warn("No search query provided");
       return { metas: [], cacheMaxAge: 0, staleRevalidate: 0 };
     }
 
     const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
-    const { channel } = await api.search(searchQuery);
+    const { channel } = await api.search(search);
 
     const metas: MetaPreview[] = channel.item.map((item) => ({
       id: `${catalog.id}:${encodeURIComponent(
@@ -61,7 +61,7 @@ builder.defineCatalogHandler<AddonConfig>(async ({config, extra, id, type}) => {
   }
 });
 
-builder.defineMetaHandler<AddonConfig>(async ({config, extra, id, type}) => {
+builder.defineMetaHandler<AddonConfig>(async ({id}) => {
   try {
     return ({
       meta: { id, name: "Test", type: "tv" },

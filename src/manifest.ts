@@ -23,6 +23,7 @@ export const manifest: Manifest = {
   config: [
     { key: "indexerUrl", type: "text", title: "Indexer URL" },
     { key: "indexerApiKey", type: "password", title: "Indexer API key" },
+    {key: "nttpServers", type: "text", title: "NNTP Servers (comma separated)"},
   ],
   behaviorHints: { configurable: true, configurationRequired: true },
 };
