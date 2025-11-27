@@ -343,7 +343,7 @@ export function landingTemplate(manifest: Manifest): string {
                 const inputType = elem.type;
                 options += `
         <div class="form-element">
-          <div class="label-to-top">${elem.title}</div>
+          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
           <input type="${inputType}" id="${key}" name="${key}" class="full-width"${defaultHTML}${isRequired} placeholder="${elem.title}"/>
         </div>
         `;
@@ -353,7 +353,7 @@ export function landingTemplate(manifest: Manifest): string {
                 const defaultHTML = elem.default ? ` value="${elem.default}"` : "";
                 options += `
         <div class="form-element">
-          <div class="label-to-top">${elem.title}</div>
+          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
           <div class="password-wrapper">
             <input type="password" id="${key}" name="${key}" class="full-width"${defaultHTML}${isRequired} placeholder="${elem.title}"/>
             <button type="button" class="password-toggle" data-target="${key}" aria-label="Toggle password visibility">
@@ -369,16 +369,17 @@ export function landingTemplate(manifest: Manifest): string {
                 options += `
         <div class="form-element">
           <label for="${key}" style="display: flex; align-items: center; cursor: pointer;">
-            <input type="checkbox" id="${key}" name="${key}"${isChecked}> <span class="label-to-right">${elem.title}</span>
+            <input type="checkbox" id="${key}" name="${key}"${isChecked}${elem.required ? ' required' : ''}> <span class="label-to-right">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</span>
           </label>
         </div>
         `;
             }
             else if (elem.type === "select") {
                 const defaultValue = elem.default || (elem.options || [])[0];
+                const isRequired = elem.required ? " required" : "";
                 options += `<div class="form-element">
-        <div class="label-to-top">${elem.title}</div>
-        <select id="${key}" name="${key}" class="full-width">
+        <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
+        <select id="${key}" name="${key}" class="full-width"${isRequired}>
         `;
                 const selections = elem.options || [];
                 selections.forEach((el) => {

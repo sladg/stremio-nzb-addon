@@ -21,9 +21,9 @@ export const manifest: Manifest = {
   types: ["movie", "series", "tv"],
   catalogs: [catalog],
   config: [
-    { key: "indexerUrl", type: "text", title: "Indexer URL" },
-    { key: "indexerApiKey", type: "password", title: "Indexer API key" },
-    {key: "nttpServers", type: "text", title: "NNTP Servers (comma separated)"},
+    { key: "indexerUrl", type: "text", title: "Indexer URL", required: true },
+    { key: "indexerApiKey", type: "password", title: "Indexer API key", required: true },
+    {key: "nttpServers", type: "text", title: "NNTP Servers (comma separated)", required: true,},
   ],
   behaviorHints: { configurable: true, configurationRequired: true },
 };
