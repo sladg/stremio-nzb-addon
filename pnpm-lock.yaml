@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@stremio-addon/node-express':
-        specifier: ^0.1.1
-        version: 0.1.1(express@5.1.0)
+        specifier: ^0.1.2
+        version: 0.1.2(express@5.1.0)
       '@stremio-addon/sdk':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0
       express:
         specifier: ^5.1.0
         version: 5.1.0
@@ -195,13 +195,13 @@ packages:
   '@standard-schema/spec@1.0.0':
     resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
 
-  '@stremio-addon/node-express@0.1.1':
-    resolution: {integrity: sha512-xWaAh7ta8mzZ3+4eZCZeX80AdFA5oOKw/Q4Tngc7ygvqxR+9gqZWXHzJwNqeEoJ+K/OOfy+l0YdzwF8qXL4C5g==}
+  '@stremio-addon/node-express@0.1.2':
+    resolution: {integrity: sha512-58BznyFfq3xorValnPnziMdWwNZNj6ZTwFwoGu6Q8kzwxvMOqmPnFc0V5yK/i2nEzPPzcQioJd5ZSUViff1gdg==}
     peerDependencies:
       express: ^5.1.0
 
-  '@stremio-addon/sdk@0.2.0':
-    resolution: {integrity: sha512-4TPM4cBbFDILFGeXOfWPB41Bp9wr+Q4FJJBxLI193+uH79KuGnck8/eRYpbvC6AylsGwP1w+3zQY5b1q8DKHFg==}
+  '@stremio-addon/sdk@0.3.0':
+    resolution: {integrity: sha512-x17bDoXk8huy+UzLRW+iCSwDSOLldL1IU5z5KGZnQ1zpl5cmURBF4mlk6qi36cXUpjXTfV5ldIpdyXPfQ81k/w==}
 
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
@@ -718,12 +718,12 @@ snapshots:
 
   '@standard-schema/spec@1.0.0': {}
 
-  '@stremio-addon/node-express@0.1.1(express@5.1.0)':
+  '@stremio-addon/node-express@0.1.2(express@5.1.0)':
     dependencies:
-      '@stremio-addon/sdk': 0.2.0
+      '@stremio-addon/sdk': 0.3.0
       express: 5.1.0
 
-  '@stremio-addon/sdk@0.2.0':
+  '@stremio-addon/sdk@0.3.0':
     dependencies:
       '@standard-schema/spec': 1.0.0
       path-to-regexp: 8.3.0
