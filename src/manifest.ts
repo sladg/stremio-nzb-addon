@@ -1,4 +1,4 @@
-import { Manifest, ManifestCatalog } from "stremio-addon-sdk";
+import { Manifest, ManifestCatalog } from "@stremio-addon/sdk";
 
 export const catalog: ManifestCatalog = {
   id: "nzb",
@@ -7,7 +7,7 @@ export const catalog: ManifestCatalog = {
   extra: [{ name: "search" }],
 };
 
-export default {
+export const manifest: Manifest = {
   id: "com.sleeyax.stremio-nzb-addon",
   name: "NZB addon",
   description: "Usenet FTW",
@@ -30,4 +30,4 @@ export default {
     },
   ],
   behaviorHints: { configurable: true, configurationRequired: true },
-} satisfies Manifest;
+};

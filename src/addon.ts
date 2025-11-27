@@ -1,70 +1,20 @@
-import express from "express";
-import cors from "cors";
-import manifest, { catalog } from "./manifest.js";
-import { NZBWebApi } from "./nzb-api.js";
-import { Args, Manifest, MetaPreview, Stream } from "stremio-addon-sdk";
-import createLandingPage from "stremio-addon-sdk/src/landingTemplate.js";
+import { AddonBuilder, MetaPreview, Stream } from "@stremio-addon/sdk";
+import { catalog, manifest } from "./manifest.js";
 import { AddonConfig } from "./types.js";
+import { NZBWebApi } from "./nzb-api.js";
 
-const app = express();
+const builder = new AddonBuilder(manifest);
 
-app.use(cors());
-
-app.get("/:config/stream/:url", async (req, res) => {
-  const args = req.params;
-  console.log(args);
-  const nzbUrl = req.params.url;
-
-  const config: AddonConfig = JSON.parse(args.config);
-
-  const url = new URL(config.streamingServerUrl);
-  url.pathname = `nzb/create`;
-  const streamingServerResponse = await fetch(url, {
-    body: JSON.stringify({ nzbUrl, servers: config.nntpServerUrls.split(",") }),
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-  if (!streamingServerResponse.ok) {
-    throw new Error(await streamingServerResponse.text());
-  }
-  const { key: streamKey } = await streamingServerResponse.json();
-
-  const streamUrl = `${config.streamingServerUrl.replace(
-    /\/$/,
-    ""
-  )}/nzb/stream?key=${streamKey}`;
-  console.log(`Redirecting to: ${streamUrl}`);
-
-  res.redirect(301, streamUrl);
-});
-
-app.get("/:config/manifest.json", (_, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.send({
-    ...manifest,
-    behaviorHints: { ...manifest.behaviorHints, configurationRequired: false },
-  } satisfies Manifest);
-});
-
-app.get("/manifest.json", (_, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.send(manifest);
-});
-
-app.get("/:config/stream/:type/:id.json", async (req, res) => {
+builder.defineStreamHandler<AddonConfig>(async (args) => {
   try {
-    const args = req.params;
     console.log(args);
     const imdbid = args.id.replace("tt", "");
-    const config: AddonConfig = JSON.parse(args.config);
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const config = args.config;
+    const baseUrl = "http://localhost:3000"; // TODO: add environment variable for this
 
     if (args.type !== "movie") {
       console.warn("Unsupported type:", args.type);
-      res.json({ streams: [], cacheMaxAge: 0, staleRevalidate: 0 });
-      return;
+      return ({ streams: [], cacheMaxAge: 0, staleRevalidate: 0 });
     }
 
     const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
@@ -80,19 +30,25 @@ app.get("/:config/stream/:type/:id.json", async (req, res) => {
 
     console.log(`Found ${streams.length} streams`);
 
-    res.json({ streams, cacheMaxAge: 0, staleRevalidate: 0 });
+    return ({ streams, cacheMaxAge: 0, staleRevalidate: 0 });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error(`Unexpected error in stream handler: ${err.message}`);
+    throw err;
   }
 });
 
-app.get("/:config/catalog/:type/:id/:extra.json", async (req, res) => {
-  try {
-    const args = req.params;
+
+builder.defineCatalogHandler<AddonConfig>(async (args) => {
+   try {
     console.log(args);
-    const config: AddonConfig = JSON.parse(args.config);
-    const extra: Args["extra"] = JSON.parse(args.extra);
+    const config = args.config;
+    const extra = args.extra
     const searchQuery = extra.search;
+
+    if (searchQuery == null || searchQuery.trim() === "") {
+      console.warn("No search query provided");
+      return { metas: [], cacheMaxAge: 0, staleRevalidate: 0 };
+    }
 
     const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
     const { channel } = await api.search(searchQuery);
@@ -106,34 +62,27 @@ app.get("/:config/catalog/:type/:id/:extra.json", async (req, res) => {
       description: item.description,
     }));
 
-    res.json({ metas, cacheMaxAge: 0, staleRevalidate: 0 });
+    return ({ metas, cacheMaxAge: 0, staleRevalidate: 0 });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error(`Unexpected error in catalog handler: ${err.message}`);
+    throw err;
   }
 });
 
-app.get("/:config/meta/:type/:id.json", async (req, res) => {
+builder.defineMetaHandler<AddonConfig>(async (args) => {
   try {
-    const args = req.params;
     console.log(args);
 
-    res.json({
+    return ({
       meta: { id: args.id, name: "Test", type: "tv" },
       cacheMaxAge: 0,
       staleRevalidate: 0,
       staleError: 0,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error(`Unexpected error in meta handler: ${err.message}`);
+    throw err;
   }
 });
 
-app.get("/:configure/configure", (_, res) => {
-  res.send(createLandingPage(manifest));
-});
-
-app.get("/configure", (_, res) => {
-  res.send(createLandingPage(manifest));
-});
-
-export default app;
+export const addonInterface = builder.getInterface();

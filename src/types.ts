@@ -1,4 +1,4 @@
-export type AddonConfig = {
+export interface AddonConfig {
   streamingServerUrl: string;
   indexerUrl: string;
   indexerApiKey: string;
