@@ -1,5 +1,7 @@
 import { RSS } from "./types";
 
+// reference: https://inhies.github.io/Newznab-API/functions/
+
 export type FunctionType = "search" | "movie" | "tvsearch";
 
 export class NZBWebApi {
