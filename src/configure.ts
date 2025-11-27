@@ -278,6 +278,42 @@ select {
   height: 18px;
   fill: currentColor;
 }
+
+.info-note {
+  background: rgba(60, 148, 60, 0.1);
+  border: 1px solid rgba(60, 148, 60, 0.3);
+  border-radius: 3px;
+  padding: 12px 14px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: #aaa;
+  line-height: 1.8;
+}
+
+.info-note a {
+  display: block;
+  margin-top: 6px;
+}
+
+.info-note strong {
+  color: #3c943c;
+}
+
+.info-note a {
+  color: #3c943c;
+}
+
+.info-note a.github {
+  color: #fff;
+}
+
+.info-note a.github:hover {
+  color: #ccc;
+}
+
+.info-note a:hover {
+  color: #4db84d;
+}
 `;
 export function landingTemplate(manifest: Manifest): string {
     const logo = manifest.logo || "https://dl.strem.io/addon-logo.png";
@@ -407,6 +443,12 @@ export function landingTemplate(manifest: Manifest): string {
           <img src="${logo}" alt="${manifest.name}">
         </div>
         <h2 class="description">${manifest.description || ""}</h2>
+      </div>
+
+      <div class="info-note">
+        <strong>⚠️ Experimental:</strong> This addon is still in development.
+        <a href="https://blog.stremio.com/stremio-new-stream-sources-usenet-rar-zip-ftp-and-more/" target="_blank" rel="noopener">Learn more about Usenet support in Stremio →</a>
+        <a class="github" href="https://github.com/sleeyax/stremio-nzb-addon" target="_blank" rel="noopener">Join us in development on GitHub →</a>
       </div>
 
       <h3>Features</h3>
