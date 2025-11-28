@@ -1,6 +1,6 @@
-# Stremio NZBHydra 2 Addon
+# Stremio NZB(Hydra 2) Addon
 
-Provides Usenet streams from [NZBHydra 2](https://github.com/theotherp/nzbhydra2) for Stremio. This addon allows you to search and stream movies and series using NZB files from your configured NZBHydra 2 indexer and NNTP servers.
+Usenet streaming from [NZBHydra 2](https://github.com/theotherp/nzbhydra2) or your own indexers (Drunken Slug, NZBGeek, nzbplanet, etc.) and NNTP servers for Stremio.
 
 > [!WARNING]
 >
@@ -17,21 +17,21 @@ The addon requires the following configuration parameters:
 ### 1. `indexerUrl` (text)
 
 - **Title:** Indexer URL
-- **Description:** The base URL of your NZBHydra 2 instance. Example: `http://localhost:5076` or your remote NZBHydra 2 server address.
+- **Description:** The base URL of your indexer or NZBHydra 2 instance.
 - **Required:** Yes
-- **Example:** `http://localhost:5076` or `https://nzbhydra2.example.com`
+- **Example:** `https://nzbhydra2.example.com` or `https://api.example.com`
 
 ### 2. `indexerApiKey` (password)
 
 - **Title:** Indexer API key
-- **Description:** Your NZBHydra 2 API key. You can find this in the NZBHydra 2 web interface under _Config > Main > API Key_.
+- **Description:** Your indexer or NZBHydra 2 API key.
 - **Required:** Yes
 - **Example:** `abcd1234efgh5678ijkl9012mnop3456`
 
 ### 3. `nntpServers` (text)
 
 - **Title:** NNTP Servers (comma separated)
-- **Description:** A comma-separated list of NNTP server addresses to use for downloading NZB files. Example: `news.example.com,news2.example.com`
+- **Description:** A list of NNTP server addresses to use for downloading NZB files. Format: `nntp(s)://{user}:{pass}@{nntpDomain}:{nntpPort}/{nntpConnections}`. See the [stremio addon SDK docs](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/stream.md) for details.
 - **Required:** Yes
 - **Example:** `nntps://username:password@news.eu.easynews.com/4`
 
@@ -39,7 +39,7 @@ The addon requires the following configuration parameters:
 
 Usenet is a global distributed discussion system that also serves as a source for binary files and media content. To download content from Usenet, you need access to:
 
-1. **An indexer** – This is a service (like NZBHydra 2) that lets you search for NZB files, which describe the content you want to download.
+1. **An indexer** – This is a service (a multi-indexer like NZBHydra 2 or a standalone indexer like Drunken Slug) that lets you search for NZB files, which describe the content you want to download.
 2. **A provider** – This is a Usenet service (NNTP server) that actually stores and delivers the files. You connect to it using the server address, and often a username and password.
 
 #### Where to get NNTP servers
