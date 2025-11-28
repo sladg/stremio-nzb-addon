@@ -28,7 +28,7 @@ The addon requires the following configuration parameters:
 - **Required:** Yes
 - **Example:** `abcd1234efgh5678ijkl9012mnop3456`
 
-### 3. `nttpServers` (text)
+### 3. `nntpServers` (text)
 
 - **Title:** NNTP Servers (comma separated)
 - **Description:** A comma-separated list of NNTP server addresses to use for downloading NZB files. Example: `news.example.com,news2.example.com`

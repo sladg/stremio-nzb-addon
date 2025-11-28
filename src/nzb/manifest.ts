@@ -2,22 +2,26 @@ import { Manifest, ManifestCatalog } from "@stremio-addon/sdk";
 import { Config } from "../types.js";
 
 export const catalog: ManifestCatalog = {
-  id: "nzbh",
-  name: "NZBHydra 2 Search Results",
+  id: "nzb",
+  name: "NZB Search Results",
   type: "tv",
   extra: [{ name: "search" }],
 };
 
 export const manifest: Manifest = {
-  id: "com.sleeyax.nzbhydra",
-  name: "NZBHydra 2",
-  description: "Provides usenet streams from your NZBHydra 2 instance",
-  logo: "https://raw.githubusercontent.com/theotherp/nzbhydra2/c06734c1489b361680dbae6f6cef2fc9841121d2/core/ui-src/img/banner-grey-dark.png",
-  version: "1.0.1",
+  id: "com.sleeyax.nzb",
+  name: "NZB",
+  description: "Provides usenet streams from your NZB indexer(s)",
+  logo: "https://raw.githubusercontent.com/nzbget/nzbget/5e26d52d706f129769e1d620a595c78498ca8cff/webui/img/favicon-256x256.png",
+  version: "1.0.0",
   resources: [
     "catalog",
     { name: "meta", types: [catalog.type], idPrefixes: [catalog.id] },
-    { name: "stream", types: ["movie", "series", "tv"], idPrefixes: ["tt", catalog.id] },
+    {
+      name: "stream",
+      types: ["movie", "series", "tv"],
+      idPrefixes: ["tt", catalog.id],
+    },
   ],
   types: ["movie", "series", "tv"],
   catalogs: [catalog],
@@ -26,12 +30,20 @@ export const manifest: Manifest = {
 
 export const config: Config = {
   fields: [
-    { key: "indexerUrl", type: "text", title: "Indexer URL", required: true },
     {
-      key: "indexerApiKey",
-      type: "password",
-      title: "Indexer API key",
+      key: "indexers",
+      type: "array",
+      title: "Indexers",
       required: true,
+      arrayOptions: [
+        { key: "url", type: "text", title: "Indexer URL", required: true },
+        {
+          key: "apiKey",
+          type: "password",
+          title: "Indexer API key",
+          required: true,
+        },
+      ],
     },
     {
       key: "nntpServers",
@@ -40,7 +52,7 @@ export const config: Config = {
       required: true,
       arrayOptions: [
         { key: "server", type: "text", title: "URL", required: true },
-      ]
+      ],
     },
   ],
 };
