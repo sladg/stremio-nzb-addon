@@ -1,4 +1,4 @@
-import { createAddonInterface } from "../addon";
-import { catalog, manifest } from "./manifest";
+import { createAddonInterface } from "../addon.js";
+import { catalog, manifest } from "./manifest.js";
 
 export const addonInterface = createAddonInterface(manifest, catalog, "NZB");

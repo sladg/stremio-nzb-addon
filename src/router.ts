@@ -1,8 +1,8 @@
 import { AddonInterface, Manifest } from "@stremio-addon/sdk";
-import { Config } from "./types";
+import { Config } from "./types.js";
 import { Router } from "express";
 import { getRouter } from "@stremio-addon/node-express";
-import { landingTemplate } from "./configure";
+import { landingTemplate } from "./configure.js";
 
 export function createRouter(manifest: Manifest, addonInterface: AddonInterface, config: Config): Router {
   const router: Router = Router();
