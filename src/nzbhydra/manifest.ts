@@ -1,5 +1,5 @@
 import { Manifest, ManifestCatalog } from "@stremio-addon/sdk";
-import { Config } from "../types";
+import { Config } from "../types.js";
 
 export const catalog: ManifestCatalog = {
   id: "nzb",

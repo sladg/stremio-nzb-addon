@@ -1,5 +1,3 @@
-import { Manifest, ManifestConfigType } from "@stremio-addon/sdk";
-
 export interface NzbHydraAddonConfig {
   indexerUrl: string;
   indexerApiKey: string;

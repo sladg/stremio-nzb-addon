@@ -1,4 +1,4 @@
-import { Config, Item } from "./types";
+import { Config, Item } from "./types.js";
 import { getRouter } from "@stremio-addon/node-express";
 import { Router } from "express";
 import { landingTemplate } from "./configure.js";

@@ -1,4 +1,4 @@
-import { RSS } from "./types";
+import { RSS } from "./types.js";
 
 // reference: https://inhies.github.io/Newznab-API/functions/
 

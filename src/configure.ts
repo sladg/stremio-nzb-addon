@@ -1,5 +1,5 @@
 import { Manifest } from "@stremio-addon/sdk";
-import { Config } from "./types";
+import { Config } from "./types.js";
 
 const STYLESHEET = `
 * {
