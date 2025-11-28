@@ -38,7 +38,7 @@ export function createAddonInterface(
           }
         } else {
           console.warn("Unsupported ", `type '${type}' with id ${id}`);
-          return { streams: [], cacheMaxAge: 0, staleRevalidate: 0 };
+          return { streams: [] };
         }
 
         const nntpServers = config.nttpServers.map(({ server }) => server);
@@ -48,7 +48,7 @@ export function createAddonInterface(
 
         console.log(`Found ${streams.length} streams for ${type} ${id}`);
 
-        return { streams, cacheMaxAge: 0, staleRevalidate: 0 };
+        return { streams };
       } catch (err: any) {
         console.error(`Unexpected error in stream handler: ${err.message}`);
         throw err;
@@ -62,7 +62,7 @@ export function createAddonInterface(
         const searchQuery = search?.trim() || "";
 
         if (!searchQuery) {
-          return { metas: [], cacheMaxAge: 0, staleRevalidate: 0 };
+          return { metas: [] };
         }
 
         return {
@@ -78,6 +78,7 @@ export function createAddonInterface(
               description: `Provides search results from ${manifest.name} for '${search}'`,
             },
           ],
+          cacheMaxAge: 3600 * 24 * 30, // The returned data is static so it may be cached for a long time (30 days).
         };
       } catch (err: any) {
         console.error(`Unexpected error in catalog handler: ${err.message}`);
