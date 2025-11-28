@@ -1,4 +1,5 @@
 import { Manifest } from "@stremio-addon/sdk";
+import { Config } from "./types";
 
 const STYLESHEET = `
 * {
@@ -320,8 +321,26 @@ select {
   text-align: center;
   margin-top: 20px;
 }
+
+.add-array-row {
+  background: none;
+  border: none;
+  color: #3c943c;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+}
+
+.remove-array-row {
+  background: none;
+  border: none;
+  color: #c93c3c;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
 `;
-export function landingTemplate(manifest: Manifest): string {
+export function landingTemplate(manifest: Manifest, config: Config): string {
     const logo = manifest.logo || "https://dl.strem.io/addon-logo.png";
     const contactHTML = manifest.contactEmail
         ? `<div class="contact">
@@ -333,9 +352,9 @@ export function landingTemplate(manifest: Manifest): string {
     
     let formHTML = "";
     let script = "";
-    if (manifest.config && (manifest.config || []).length) {
+    if (config && (config.fields || []).length) {
         let options = "";
-        manifest.config.forEach((elem) => {
+        config.fields.forEach((elem) => {
             const key = elem.key;
             if (["text", "number"].includes(elem.type)) {
                 const isRequired = elem.required ? " required" : "";
@@ -364,31 +383,37 @@ export function landingTemplate(manifest: Manifest): string {
         </div>
         `;
             }
-            else if (elem.type === "checkbox") {
-                const isChecked = elem.default === "checked" ? " checked" : "";
+            else if (elem.type === "array") {
+                const templateId = `${elem.key}-row-template`;
+                const containerId = `${elem.key}-container`;
+                let rowFields = "";
+                (elem.arrayOptions || []).forEach((sub: any) => {
+                    const subRequired = sub.required ? " required" : "";
+                    const inputType = sub.type === 'number' ? 'number' : 'text';
+                    rowFields += `
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+              <input type="${inputType}" data-sub-key="${sub.key}" class="full-width" placeholder="${sub.title}"${subRequired} />
+            </div>`;
+                });
+
                 options += `
         <div class="form-element">
-          <label for="${key}" style="display: flex; align-items: center; cursor: pointer;">
-            <input type="checkbox" id="${key}" name="${key}"${isChecked}${elem.required ? ' required' : ''}> <span class="label-to-right">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</span>
-          </label>
+          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
+          <template id="${templateId}">
+            <div class="array-row">
+              ${rowFields}
+              <div style="text-align:right;margin-top:6px;">
+                <button type="button" class="remove-array-row">Remove</button>
+              </div>
+            </div>
+          </template>
+
+          <div id="${containerId}"></div>
+          <div style="margin-top:8px; margin-bottom:8px">
+            <button type="button" class="add-array-row" data-target="${elem.key}">+ Add ${elem.title}</button>
+          </div>
         </div>
         `;
-            }
-            else if (elem.type === "select") {
-                const defaultValue = elem.default || (elem.options || [])[0];
-                const isRequired = elem.required ? " required" : "";
-                options += `<div class="form-element">
-        <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
-        <select id="${key}" name="${key}" class="full-width"${isRequired}>
-        `;
-                const selections = elem.options || [];
-                selections.forEach((el) => {
-                    const isSelected = el === defaultValue ? " selected" : "";
-                    options += `<option value="${el}"${isSelected}>${el}</option>`;
-                });
-                options += `</select>
-               </div>
-               `;
             }
         });
         if (options.length) {
@@ -401,15 +426,39 @@ export function landingTemplate(manifest: Manifest): string {
       <div class="separator"></div>
       `;
             script += `
-      installLink.onclick = () => {
-        return mainForm.reportValidity()
-      }
-      const updateLink = () => {
-        const config = Object.fromEntries(new FormData(mainForm))
-        installLink.href = 'stremio://' + window.location.host + '/' + encodeURIComponent(JSON.stringify(config)) + '/manifest.json'
-      }
-      mainForm.onchange = updateLink
+      installLink.onclick = () => { return mainForm.reportValidity() }
 
+      const buildConfig = () => {
+        const fd = new FormData(mainForm);
+        const cfg = {};
+        // non-array fields
+        ${JSON.stringify(((config && config.fields) || []).filter((f) => f.type !== 'array').map((f) => f.key))}.forEach(k => {
+          const v = fd.get(k);
+          if (v !== null) cfg[k] = v;
+        });
+
+        // array fields
+        (${JSON.stringify(((config && config.fields) || []).filter((f) => f.type === 'array').map((f) => f.key))}).forEach(k => {
+          const rows = [];
+          document.querySelectorAll('#' + k + '-container .array-row').forEach(row => {
+            const obj = {};
+            row.querySelectorAll('[data-sub-key]').forEach(inp => {
+              obj[inp.dataset.subKey] = inp.value;
+            });
+            // only push if at least one subfield has a value
+            if (Object.values(obj).some(v => v !== null && v !== undefined && String(v).length > 0)) rows.push(obj);
+          });
+          cfg[k] = rows;
+        });
+        return cfg;
+      }
+
+      const updateLink = () => {
+        const configObj = buildConfig();
+        installLink.href = 'stremio://' + window.location.host + '/' + encodeURIComponent(JSON.stringify(configObj)) + '/manifest.json';
+      }
+
+      // password visibility toggles
       document.querySelectorAll('.password-toggle').forEach(btn => {
         btn.addEventListener('click', () => {
           const input = document.getElementById(btn.dataset.target);
@@ -426,6 +475,62 @@ export function landingTemplate(manifest: Manifest): string {
           }
         });
       });
+
+      // array add/remove behavior
+      function addRowForKey(key, values) {
+        const tpl = document.getElementById(key + '-row-template');
+        const container = document.getElementById(key + '-container');
+        if (!tpl || !container) return;
+        const clone = tpl.content.firstElementChild.cloneNode(true);
+        clone.classList.add('array-row');
+        // fill values if provided
+        if (values) {
+          clone.querySelectorAll('[data-sub-key]').forEach(inp => {
+            const name = inp.dataset.subKey;
+            if (values[name] !== undefined) inp.value = values[name];
+          });
+        }
+        // attach remove handler and manage visibility
+        const rem = clone.querySelector('.remove-array-row');
+        const existing = container.querySelectorAll('.array-row');
+        if (rem) {
+          rem.addEventListener('click', () => {
+            clone.remove();
+            updateLink();
+            // if only one row remains, hide its remove button
+            const rows = container.querySelectorAll('.array-row');
+            if (rows.length === 1) {
+              const onlyRem = rows[0].querySelector('.remove-array-row');
+              if (onlyRem) onlyRem.style.display = 'none';
+            }
+          });
+
+          // if this will be the first row, hide its remove button
+          if (existing.length === 0) {
+            rem.style.display = 'none';
+          } else {
+            // there is at least one existing row: ensure both have remove visible
+            rem.style.display = '';
+            if (existing.length === 1) {
+              const prevRem = existing[0].querySelector('.remove-array-row');
+              if (prevRem) prevRem.style.display = '';
+            }
+          }
+        }
+
+        container.appendChild(clone);
+      }
+
+      document.querySelectorAll('.add-array-row').forEach(btn => {
+        btn.addEventListener('click', () => {
+          addRowForKey(btn.dataset.target, null);
+        });
+      });
+
+      // initialize one empty row for each array field
+      (${JSON.stringify(((config && config.fields) || []).filter((f) => f.type === 'array').map((f) => f.key))}).forEach(k => addRowForKey(k, null));
+
+      mainForm.onchange = updateLink
       mainForm.oninput = updateLink
       `;
         }

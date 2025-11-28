@@ -1,23 +1,23 @@
 import { AddonBuilder, MetaPreview, Stream } from "@stremio-addon/sdk";
 import { catalog, manifest } from "./manifest.js";
-import { AddonConfig, Item } from "../types.js";
+import { NzbHydraAddonConfig, Item } from "../types.js";
 import { NZBWebApi } from "../nzb-api.js";
-import { getNttpServers, toHumanFileSize, imdbToTvdb, getItemSize } from "../utils.js";
+import { toHumanFileSize, imdbToTvdb, getItemSize } from "../utils.js";
 
 const builder = new AddonBuilder(manifest);
 
-function itemToStream(item: Item, nttpServers: string): Stream {
+function itemToStream(item: Item, servers: string[]): Stream {
   const size = getItemSize(item);
   const sizeStr = size ? toHumanFileSize(size) + "\n" : "";
   return {
     title: `${item.title}\n${sizeStr}${item.category}`,
     name: "NZB",
     nzbUrl: item.link?.split("&amp;").join("&") || item.enclosure["@attributes"].url,
-    servers: getNttpServers(nttpServers),
+    servers
   };
 }
 
-builder.defineStreamHandler<AddonConfig>(async ({config, id, type}) => {
+builder.defineStreamHandler<NzbHydraAddonConfig>(async ({config, id, type}) => {
   try {
     const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
     let items: Item[] = [];
@@ -42,7 +42,8 @@ builder.defineStreamHandler<AddonConfig>(async ({config, id, type}) => {
       return ({ streams: [], cacheMaxAge: 0, staleRevalidate: 0 });
     }
 
-    const streams: Stream[] = items.map((item) => itemToStream(item, config.nttpServers));
+    const nntpServers = config.nttpServers.map(({server}) =>server);
+    const streams: Stream[] = items.map((item) => itemToStream(item, nntpServers));
 
     console.log(`Found ${streams.length} streams for ${type} ${id}`);
 
@@ -54,7 +55,7 @@ builder.defineStreamHandler<AddonConfig>(async ({config, id, type}) => {
 });
 
 
-builder.defineCatalogHandler<AddonConfig>(async ({config, extra: {search}}) => {
+builder.defineCatalogHandler<NzbHydraAddonConfig>(async ({config, extra: {search}}) => {
    try {
     if (search == null || search.trim() === "") {
       console.warn("No search query provided");
@@ -80,7 +81,7 @@ builder.defineCatalogHandler<AddonConfig>(async ({config, extra: {search}}) => {
   }
 });
 
-builder.defineMetaHandler<AddonConfig>(async ({id}) => {
+builder.defineMetaHandler<NzbHydraAddonConfig>(async ({id}) => {
   try {
     return ({
       meta: { id, name: "Test", type: "tv" },

@@ -1,15 +1,8 @@
-import { Item } from "./types";
+import { Config, Item } from "./types";
 import { getRouter } from "@stremio-addon/node-express";
 import { Router } from "express";
 import { landingTemplate } from "./configure.js";
 import { AddonInterface, Manifest } from "@stremio-addon/sdk";
-
-export function getNttpServers(value: string): string[] {
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
 
 export function toHumanFileSize(size: number): string {
   if (size === 0) {
@@ -52,18 +45,18 @@ export function getItemSize(item: Item): number {
   return sizeAttr ? parseInt(sizeAttr["@attributes"].value, 10) || 0 : 0;
 }
 
-export function createRouter(manifest: Manifest, addonInterface: AddonInterface): Router {
+export function createRouter(manifest: Manifest, addonInterface: AddonInterface, config: Config): Router {
   const router: Router = Router();
   
   router.use("/", getRouter(addonInterface));
   router.get("/", (req, res) => res.redirect(`${req.baseUrl}/configure`));
   
   router.get("/:configure/configure", (_, res) => {
-    res.send(landingTemplate(manifest));
+    res.send(landingTemplate(manifest, config));
   });
   
   router.get("/configure", (_, res) => {
-    res.send(landingTemplate(manifest));
+    res.send(landingTemplate(manifest, config));
   });
   
   return router;

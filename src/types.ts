@@ -1,8 +1,10 @@
-export interface AddonConfig {
+import { Manifest, ManifestConfigType } from "@stremio-addon/sdk";
+
+export interface NzbHydraAddonConfig {
   indexerUrl: string;
   indexerApiKey: string;
-  nttpServers: string;
-};
+  nttpServers: Array<{server: string}>;
+}
 
 export interface RSS {
   channel: Channel;
@@ -59,4 +61,18 @@ export interface Attr {
 export interface Attributes3 {
   name: string;
   value: string;
+}
+
+export interface Config {
+  fields: ConfigField[];
+}
+
+export interface ConfigField {
+  key: string;
+  type: "text" | "password"  | "array";
+  default?: string;
+  title?: string;
+  options?: string[];
+  required?: boolean;
+  arrayOptions?: Omit<ConfigField, 'arrayOptions'>[];
 }

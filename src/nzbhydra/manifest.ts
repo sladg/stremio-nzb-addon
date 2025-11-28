@@ -1,4 +1,5 @@
 import { Manifest, ManifestCatalog } from "@stremio-addon/sdk";
+import { Config } from "../types";
 
 export const catalog: ManifestCatalog = {
   id: "nzb",
@@ -20,10 +21,26 @@ export const manifest: Manifest = {
   ],
   types: ["movie", "series", "tv"],
   catalogs: [catalog],
-  config: [
-    { key: "indexerUrl", type: "text", title: "Indexer URL", required: true },
-    { key: "indexerApiKey", type: "password", title: "Indexer API key", required: true },
-    {key: "nttpServers", type: "text", title: "NNTP Servers (comma separated)", required: true,},
-  ],
   behaviorHints: { configurable: true, configurationRequired: true },
+};
+
+export const config: Config = {
+  fields: [
+    { key: "indexerUrl", type: "text", title: "Indexer URL", required: true },
+    {
+      key: "indexerApiKey",
+      type: "password",
+      title: "Indexer API key",
+      required: true,
+    },
+    {
+      key: "nttpServers",
+      type: "array",
+      title: "NNTP Servers",
+      required: true,
+      arrayOptions: [
+        { key: "server", type: "text", title: "URL", required: true },
+      ]
+    },
+  ],
 };
