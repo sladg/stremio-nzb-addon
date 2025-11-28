@@ -596,17 +596,17 @@ export function landingTemplate(manifest: Manifest, config: Config): string {
 
   <body>
     <div id="addon">
+      <div class="info-note">
+        <strong>⚠️ Experimental:</strong> usenet streaming is experimental.
+        <a href="https://blog.stremio.com/stremio-new-stream-sources-usenet-rar-zip-ftp-and-more/" target="_blank" rel="noopener">Learn more about Usenet support in Stremio →</a>
+      </div>
+
       <div class="header">
         <div class="logo">
           <img src="${logo}" alt="${manifest.name}">
         </div>
         <h1><span class="accent">${manifest.name}</span></h1>
         <h2 class="description">${manifest.description || ""}</h2>
-      </div>
-
-      <div class="info-note">
-        <strong>⚠️ Experimental:</strong> usenet streaming is experimental.
-        <a href="https://blog.stremio.com/stremio-new-stream-sources-usenet-rar-zip-ftp-and-more/" target="_blank" rel="noopener">Learn more about Usenet support in Stremio →</a>
       </div>
 
       <h3>Features</h3>
