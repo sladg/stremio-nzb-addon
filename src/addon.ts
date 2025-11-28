@@ -5,7 +5,7 @@ import {
   ManifestCatalog,
   Stream,
 } from "@stremio-addon/sdk";
-import { NzbHydraAddonConfig, Item } from "./types.js";
+import { NzbHydraAddonConfig, Item, Channel } from "./types.js";
 import { NZBWebApi } from "./nzb-api.js";
 
 export function createAddonInterface(
@@ -19,30 +19,29 @@ export function createAddonInterface(
     async ({ config, id, type }) => {
       try {
         const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
-        let items: Item[] = [];
+        let channel: Channel | undefined;
 
         if (type === "movie") {
           const imdbid = id.replace("tt", "");
-          const { channel } = await api.searchMovie(imdbid);
-          items = channel.item || [];
+          const res = await api.searchMovie(imdbid);
+          channel = res.channel;
         } else if (type === "series") {
           const [imdbIdWithPrefix, season, episode] = id.split(":");
           const imdbId = imdbIdWithPrefix.replace("tt", "");
 
           const tvdbId = await imdbToTvdb(`tt${imdbId}`);
           if (tvdbId) {
-            const { channel } = await api.searchSeries(tvdbId, season, episode);
-            items = channel.item || [];
+            const res = await api.searchSeries(tvdbId, season, episode);
+            channel = res.channel;
           } else {
             console.warn(`Could not find TVDB ID for IMDB: tt${imdbId}`);
           }
         } else {
           console.warn("Unsupported ", `type '${type}' with id ${id}`);
-          return { streams: [] };
         }
 
         const nntpServers = config.nttpServers.map(({ server }) => server);
-        const streams: Stream[] = items.map((item) =>
+        const streams: Stream[] = (channel?.item ?? []).map((item) =>
           itemToStream(item, nntpServers, name)
         );
 
