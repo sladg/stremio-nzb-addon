@@ -7,7 +7,7 @@ export type FunctionType = "search" | "movie" | "tvsearch";
 class NZBWebApi {
   constructor(
     private readonly baseUrl: string,
-    private readonly apiKey: string
+    private readonly apiKey: string,
   ) {}
 
   private buildUrl(type: FunctionType = "search"): URL {
@@ -41,7 +41,7 @@ class NZBWebApi {
   async searchSeries(
     tvdbId: string,
     season: string,
-    episode: string
+    episode: string,
   ): Promise<RSS> {
     const url = this.buildUrl("tvsearch");
     url.searchParams.set("tvdbid", tvdbId);
@@ -57,12 +57,12 @@ export class NZBWebApiPool {
 
   constructor(indexers: NzbAddonConfig["indexers"]) {
     this.apis = indexers.map(
-      (indexer) => new NZBWebApi(indexer.url, indexer.apiKey)
+      (indexer) => new NZBWebApi(indexer.url, indexer.apiKey),
     );
   }
 
   async call(
-    handler: (api: NZBWebApi) => Promise<RSS>
+    handler: (api: NZBWebApi) => Promise<RSS>,
   ): Promise<RSS["channel"]["item"]> {
     const rawResponses = await Promise.allSettled(this.apis.map(handler));
     const responses = rawResponses

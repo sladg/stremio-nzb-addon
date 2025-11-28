@@ -35,7 +35,6 @@ The addon requires the following configuration parameters:
 - **Required:** Yes
 - **Example:** `nntps://username:password@news.eu.easynews.com/4`
 
-
 ### The Basics
 
 Usenet is a global distributed discussion system that also serves as a source for binary files and media content. To download content from Usenet, you need access to:
@@ -47,7 +46,6 @@ Usenet is a global distributed discussion system that also serves as a source fo
 
 - **Commercial Usenet providers:** Most users get NNTP server access by subscribing to a Usenet provider. Popular options include [Easynews](https://www.easynews.com/), [Newshosting](https://www.newshosting.com/), [UsenetServer](https://www.usenetserver.com/), [Eweka](https://www.eweka.nl/), and many others. These providers offer paid plans with high retention and speed.
 - **Free servers:** Some ISPs or universities may offer free NNTP access, but these are rare and often limited.
-
 
 **What you need to use this addon:** When you sign up, you’ll receive server addresses, a username, and a password. Enter the server addresses (comma separated if you have multiple servers) in the addon configuration.
 

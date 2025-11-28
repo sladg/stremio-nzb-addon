@@ -342,38 +342,39 @@ select {
 }
 `;
 export function landingTemplate(manifest: Manifest, config: Config): string {
-    const logo = manifest.logo || "https://dl.strem.io/addon-logo.png";
-    const contactHTML = manifest.contactEmail
-        ? `<div class="contact">
+  const logo = manifest.logo || "https://dl.strem.io/addon-logo.png";
+  const contactHTML = manifest.contactEmail
+    ? `<div class="contact">
       <p>Contact ${manifest.name} creator:</p>
       <a href="mailto:${manifest.contactEmail}">${manifest.contactEmail}</a>
     </div>`
-        : "";
-    const stylizedTypes = manifest.types.map((t) => t[0].toUpperCase() + t.slice(1) + (t !== "series" ? "s" : ""));
-    
-    let formHTML = "";
-    let script = "";
-    if (config && (config.fields || []).length) {
-        let options = "";
-        config.fields.forEach((elem) => {
-            const key = elem.key;
-            if (["text", "number"].includes(elem.type)) {
-                const isRequired = elem.required ? " required" : "";
-                const defaultHTML = elem.default ? ` value="${elem.default}"` : "";
-                const inputType = elem.type;
-                options += `
+    : "";
+  const stylizedTypes = manifest.types.map(
+    (t) => t[0].toUpperCase() + t.slice(1) + (t !== "series" ? "s" : ""),
+  );
+
+  let formHTML = "";
+  let script = "";
+  if (config && (config.fields || []).length) {
+    let options = "";
+    config.fields.forEach((elem) => {
+      const key = elem.key;
+      if (["text", "number"].includes(elem.type)) {
+        const isRequired = elem.required ? " required" : "";
+        const defaultHTML = elem.default ? ` value="${elem.default}"` : "";
+        const inputType = elem.type;
+        options += `
         <div class="form-element">
-          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
+          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ""}</div>
           <input type="${inputType}" id="${key}" name="${key}" class="full-width"${defaultHTML}${isRequired} placeholder="${elem.placeholder || elem.title}"/>
         </div>
         `;
-            }
-            else if (elem.type === "password") {
-                const isRequired = elem.required ? " required" : "";
-                const defaultHTML = elem.default ? ` value="${elem.default}"` : "";
-                options += `
+      } else if (elem.type === "password") {
+        const isRequired = elem.required ? " required" : "";
+        const defaultHTML = elem.default ? ` value="${elem.default}"` : "";
+        options += `
         <div class="form-element">
-          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
+          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ""}</div>
           <div class="password-wrapper">
             <input type="password" id="${key}" name="${key}" class="full-width"${defaultHTML}${isRequired} placeholder="${elem.placeholder || elem.title}"/>
             <button type="button" class="password-toggle" data-target="${key}" aria-label="Toggle password visibility">
@@ -383,15 +384,14 @@ export function landingTemplate(manifest: Manifest, config: Config): string {
           </div>
         </div>
         `;
-            }
-            else if (elem.type === "array") {
-                const templateId = `${elem.key}-row-template`;
-                const containerId = `${elem.key}-container`;
-                let rowFields = "";
-                (elem.arrayOptions || []).forEach((sub: any) => {
-                    const subRequired = sub.required ? " required" : "";
-                    if (sub.type === 'password') {
-                        rowFields += `
+      } else if (elem.type === "array") {
+        const templateId = `${elem.key}-row-template`;
+        const containerId = `${elem.key}-container`;
+        let rowFields = "";
+        (elem.arrayOptions || []).forEach((sub: any) => {
+          const subRequired = sub.required ? " required" : "";
+          if (sub.type === "password") {
+            rowFields += `
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;width:100%;">
               <div class="password-wrapper" style="width:100%;position:relative;">
                 <input type="password" data-sub-key="${sub.key}" class="full-width" placeholder="${sub.placeholder || sub.title}"${subRequired} />
@@ -401,18 +401,18 @@ export function landingTemplate(manifest: Manifest, config: Config): string {
                 </button>
               </div>
             </div>`;
-                    } else {
-                        const inputType = sub.type === 'number' ? 'number' : 'text';
-                        rowFields += `
+          } else {
+            const inputType = sub.type === "number" ? "number" : "text";
+            rowFields += `
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
               <input type="${inputType}" data-sub-key="${sub.key}" class="full-width" placeholder="${sub.placeholder || sub.title}"${subRequired} />
             </div>`;
-                    }
-                });
+          }
+        });
 
-                options += `
+        options += `
         <div class="form-element">
-          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ''}</div>
+          <div class="label-to-top">${elem.title}${elem.required ? ' <span style="color: red;">*</span>' : ""}</div>
           <template id="${templateId}">
             <div class="array-row">
               ${rowFields}
@@ -428,10 +428,10 @@ export function landingTemplate(manifest: Manifest, config: Config): string {
           </div>
         </div>
         `;
-            }
-        });
-        if (options.length) {
-            formHTML = `
+      }
+    });
+    if (options.length) {
+      formHTML = `
       <form id="mainForm">
         <h3>Configuration</h3>
         ${options}
@@ -439,20 +439,20 @@ export function landingTemplate(manifest: Manifest, config: Config): string {
 
       <div class="separator"></div>
       `;
-            script += `
+      script += `
       installLink.onclick = () => { return mainForm.reportValidity() }
 
       const buildConfig = () => {
         const fd = new FormData(mainForm);
         const cfg = {};
         // non-array fields
-        ${JSON.stringify(((config && config.fields) || []).filter((f) => f.type !== 'array').map((f) => f.key))}.forEach(k => {
+        ${JSON.stringify(((config && config.fields) || []).filter((f) => f.type !== "array").map((f) => f.key))}.forEach(k => {
           const v = fd.get(k);
           if (v !== null) cfg[k] = v;
         });
 
         // array fields
-        (${JSON.stringify(((config && config.fields) || []).filter((f) => f.type === 'array').map((f) => f.key))}).forEach(k => {
+        (${JSON.stringify(((config && config.fields) || []).filter((f) => f.type === "array").map((f) => f.key))}).forEach(k => {
           const rows = [];
           document.querySelectorAll('#' + k + '-container .array-row').forEach(row => {
             const obj = {};
@@ -574,14 +574,14 @@ export function landingTemplate(manifest: Manifest, config: Config): string {
       });
 
       // initialize one empty row for each array field
-      (${JSON.stringify(((config && config.fields) || []).filter((f) => f.type === 'array').map((f) => f.key))}).forEach(k => addRowForKey(k, null));
+      (${JSON.stringify(((config && config.fields) || []).filter((f) => f.type === "array").map((f) => f.key))}).forEach(k => addRowForKey(k, null));
 
       mainForm.onchange = updateLink
       mainForm.oninput = updateLink
       `;
-        }
     }
-    return `
+  }
+  return `
   <!DOCTYPE html>
   <html>
 

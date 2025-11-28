@@ -11,7 +11,7 @@ import { NZBWebApiPool } from "./nzb-api.js";
 export function createAddonInterface(
   manifest: Manifest,
   catalog: ManifestCatalog,
-  name: string
+  name: string,
 ): AddonInterface {
   const builder = new AddonBuilder(manifest);
 
@@ -41,7 +41,7 @@ export function createAddonInterface(
 
         const nntpServers = config.nntpServers.map(({ server }) => server);
         const streams: Stream[] = (items ?? []).map((item) =>
-          itemToStream(item, nntpServers, name)
+          itemToStream(item, nntpServers, name),
         );
 
         console.log(`Found ${streams.length} streams for ${type} ${id}`);
@@ -51,7 +51,7 @@ export function createAddonInterface(
         console.error(`Unexpected error in stream handler: ${err.message}`);
         throw err;
       }
-    }
+    },
   );
 
   builder.defineCatalogHandler(async ({ extra: { search } }) => {
@@ -95,7 +95,7 @@ export function createAddonInterface(
         }
 
         const searchQuery = decodeURIComponent(
-          id.replace(catalog.id + ":", "")
+          id.replace(catalog.id + ":", ""),
         );
         const nntpServers = config.nntpServers.map(({ server }) => server);
         const api = new NZBWebApiPool(config.indexers);
@@ -120,7 +120,7 @@ export function createAddonInterface(
         console.error(`Unexpected error in meta handler: ${err.message}`);
         throw err;
       }
-    }
+    },
   );
 
   const addonInterface = builder.getInterface();
@@ -163,7 +163,7 @@ async function imdbToTvdb(imdbId: string): Promise<string | null> {
 
   try {
     const response = await fetch(
-      `https://thetvdb.com/api/GetSeriesByRemoteID.php?imdbid=${imdbId}`
+      `https://thetvdb.com/api/GetSeriesByRemoteID.php?imdbid=${imdbId}`,
     );
     const text = await response.text();
 
@@ -187,7 +187,7 @@ function getItemSize(item: Item): number {
 }
 
 function normalizeConfig(
-  config: NzbHydraAddonConfig | NzbAddonConfig
+  config: NzbHydraAddonConfig | NzbAddonConfig,
 ): NzbAddonConfig {
   if ("indexerUrl" in config && "indexerApiKey" in config) {
     // Convert NzbHydraAddonConfig to NzbAddonConfig.
