@@ -235,7 +235,7 @@ function itemToStream(
   }
 
   return {
-    description: descriptionParts.join(" "),
+    description: descriptionParts.join("\n"),
     name: nameParts.join(" "),
     nzbUrl: getNzbUrlFromItem(item),
     servers,
