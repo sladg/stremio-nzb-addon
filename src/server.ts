@@ -1,23 +1,14 @@
-import { getRouter } from "@stremio-addon/node-express";
-import { addonInterface } from "./addon.js";
 import express from "express";
-import { landingTemplate } from "./configure.js";
-import { manifest } from "./manifest.js";
+import { router as nzbHydraRouter } from "./nzbhydra/router.js";
+import { router as nzbRouter } from "./nzb/router.js";
 
 const app = express();
 const port = process.env.PORT ? +process.env.PORT : 3000;
 
-app.use("/", getRouter(addonInterface));
-app.get("/", (_, res) => res.redirect("/configure"));
+app.use("/nzbhydra", nzbHydraRouter);
+app.use("/nzb", nzbRouter);
+app.use(express.static('public'))
 
 app.listen(port, () => {
   console.log(`Addon listening at http://localhost:${port}`);
-});
-
-app.get("/:configure/configure", (_, res) => {
-  res.send(landingTemplate(manifest));
-});
-
-app.get("/configure", (_, res) => {
-  res.send(landingTemplate(manifest));
 });

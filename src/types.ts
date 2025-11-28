@@ -1,10 +1,17 @@
-export interface AddonConfig {
+interface AddonConfig {
+  nntpServers: Array<{ server: string }>;
+}
+
+export interface NzbHydraAddonConfig extends AddonConfig {
   indexerUrl: string;
   indexerApiKey: string;
-  nttpServers: string;
-};
+}
 
-export interface RSS {
+export interface NzbAddonConfig extends AddonConfig {
+  indexers: Array<{ url: string; apiKey: string }>;
+}
+
+export interface RSS extends Channel {
   channel: Channel;
 }
 
@@ -59,4 +66,19 @@ export interface Attr {
 export interface Attributes3 {
   name: string;
   value: string;
+}
+
+export interface Config {
+  fields: ConfigField[];
+}
+
+export interface ConfigField {
+  key: string;
+  type: "text" | "password" | "array";
+  default?: string;
+  title?: string;
+  options?: string[];
+  required?: boolean;
+  placeholder?: string;
+  arrayOptions?: Omit<ConfigField, "arrayOptions">[];
 }
