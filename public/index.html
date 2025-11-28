@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stremio NZB addon</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+* {
+  box-sizing: border-box;
+}
+
+body,
+html {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100%;
+}
+
+html {
+  background: #000;
+}
+
+body {
+  padding: 2vh;
+  font-size: 14px;
+  display: flex;
+  font-family: 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color: #c8c8c8;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 32px;
+  font-weight: 700;
+  color: #fff;
+}
+
+h1 .accent {
+  color: #3c943c;
+}
+
+h2 {
+  font-size: 14px;
+  font-weight: normal;
+  opacity: 0.7;
+  margin-top: 4px;
+}
+
+h3 {
+  font-size: 14px;
+  color: #3c943c;
+  border-bottom: 1px solid #333;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+p {
+  font-size: 13px;
+}
+
+ul {
+  font-size: 13px;
+  margin: 0;
+  margin-top: 8px;
+  padding-left: 20px;
+  color: #888;
+}
+
+ul li {
+  padding: 4px 0;
+}
+
+a {
+  color: #3c943c;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #4db84d;
+  text-decoration: underline;
+}
+
+.install-link {
+  display: block;
+  text-decoration: none;
+  border: 1px solid #3c943c;
+  outline: 0;
+  color: #fff;
+  background: #3c943c;
+  padding: 10px 30px;
+  margin: 0 auto;
+  text-align: center;
+  font-family: 'Roboto', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s ease-in-out;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.install-link:hover {
+  background: #4db84d;
+  border-color: #4db84d;
+  text-decoration: none;
+  color: #fff;
+}
+
+.install-link:active {
+  background: #2d7a2d;
+  border-color: #2d7a2d;
+}
+
+#addon {
+  width: 420px;
+  max-width: 95%;
+  margin: auto;
+  background: #111;
+  padding: 30px;
+  border-radius: 4px;
+  border: 1px solid #222;
+}
+
+.logo {
+  margin: 0 auto 20px;
+}
+
+.logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.name {
+  margin: 0;
+}
+
+.version {
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+  margin-top: 20px;
+  font-weight: 400;
+}
+
+.description {
+  font-style: normal;
+  color: #888;
+  margin-top: 8px;
+}
+
+.contact {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #222;
+  text-align: center;
+}
+
+.contact p {
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.separator {
+  margin-bottom: 20px;
+}
+
+.form-element {
+  margin-bottom: 16px;
+}
+
+.label-to-top {
+  margin-bottom: 6px;
+  color: #888;
+  font-size: 13px;
+}
+
+.label-to-right {
+  margin-left: 8px !important;
+  color: #c8c8c8;
+}
+
+.full-width {
+  width: 100%;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="password"],
+select {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #c8c8c8;
+  padding: 8px 12px;
+  font-size: 14px;
+  border-radius: 3px;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="password"]:focus,
+select:focus {
+  outline: none;
+  border-color: #3c943c;
+}
+
+input[type="checkbox"] {
+  accent-color: #3c943c;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23888' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+.features-list {
+  background: #0a0a0a;
+  border: 1px solid #222;
+  border-radius: 3px;
+  padding: 12px 16px;
+  margin-top: 8px;
+}
+
+.features-list ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.password-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-wrapper input {
+  padding-right: 40px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.password-toggle:hover {
+  color: #3c943c;
+}
+
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.info-note {
+  background: rgba(60, 148, 60, 0.1);
+  border: 1px solid rgba(60, 148, 60, 0.3);
+  border-radius: 3px;
+  padding: 12px 14px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: #aaa;
+  line-height: 1.8;
+}
+
+.info-note a {
+  display: block;
+  margin-top: 6px;
+}
+
+.info-note strong {
+  color: #3c943c;
+}
+
+.info-note a {
+  color: #3c943c;
+}
+
+.info-note a.github {
+  color: #fff;
+}
+
+.info-note a.github:hover {
+  color: #ccc;
+}
+
+.info-note a:hover {
+  color: #4db84d;
+}
+
+.github {
+  display: block;
+  text-align: center;
+  margin-top: 20px;
+}
+
+.add-array-row {
+  background: none;
+  border: none;
+  color: #3c943c;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+}
+
+.remove-array-row {
+  background: none;
+  border: none;
+  color: #c93c3c;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+  </style>
+</head>
+<body>
+  <div id="addon">
+    <div class="header">
+      <h1>Stremio <span class="accent">NZB</span> Addon</h1>
+      <h2>Choose your preferred addon:</h2>
+    </div>
+    <div class="features-list">
+      <ul>
+        <li><a href="/nzbhydra">NZBHydra 2</a></li>
+        <li><a href="/nzb">NZB</a></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
