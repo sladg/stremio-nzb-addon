@@ -1,8 +1,8 @@
 import { AddonBuilder, MetaPreview, Stream } from "@stremio-addon/sdk";
 import { catalog, manifest } from "./manifest.js";
-import { AddonConfig, Item } from "./types.js";
-import { NZBWebApi } from "./nzb-api.js";
-import { getNttpServers, toHumanFileSize, imdbToTvdb, getItemSize } from "./utils.js";
+import { AddonConfig, Item } from "../types.js";
+import { NZBWebApi } from "../nzb-api.js";
+import { getNttpServers, toHumanFileSize, imdbToTvdb, getItemSize } from "../utils.js";
 
 const builder = new AddonBuilder(manifest);
 

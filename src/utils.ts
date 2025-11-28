@@ -1,4 +1,8 @@
 import { Item } from "./types";
+import { getRouter } from "@stremio-addon/node-express";
+import { Router } from "express";
+import { landingTemplate } from "./configure.js";
+import { AddonInterface, Manifest } from "@stremio-addon/sdk";
 
 export function getNttpServers(value: string): string[] {
   return value
@@ -46,4 +50,21 @@ export function getItemSize(item: Item): number {
   const attr = item.attr || [];
   const sizeAttr = attr.find((el) => el["@attributes"]?.name === "size");
   return sizeAttr ? parseInt(sizeAttr["@attributes"].value, 10) || 0 : 0;
+}
+
+export function createRouter(manifest: Manifest, addonInterface: AddonInterface): Router {
+  const router: Router = Router();
+  
+  router.use("/", getRouter(addonInterface));
+  router.get("/", (req, res) => res.redirect(`${req.baseUrl}/configure`));
+  
+  router.get("/:configure/configure", (_, res) => {
+    res.send(landingTemplate(manifest));
+  });
+  
+  router.get("/configure", (_, res) => {
+    res.send(landingTemplate(manifest));
+  });
+  
+  return router;
 }
