@@ -3,7 +3,6 @@ import {
   AddonInterface,
   Manifest,
   ManifestCatalog,
-  MetaPreview,
   Stream,
 } from "@stremio-addon/sdk";
 import { NzbHydraAddonConfig, Item } from "./types.js";
@@ -19,16 +18,6 @@ export function createAddonInterface(
   builder.defineStreamHandler<NzbHydraAddonConfig>(
     async ({ config, id, type }) => {
       try {
-        const nntpServers = config.nttpServers.map(({ server }) => server);
-
-        if (id.startsWith(catalog.id + ":")) {
-          const encodedUrl = id.replace(catalog.id + ":", "");
-          const url = decodeURIComponent(encodedUrl);
-          return {
-            streams: [{ nzbUrl: url, servers: nntpServers, name, title: "Stream" }],
-          };
-        }
-
         const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
         let items: Item[] = [];
 
@@ -52,6 +41,7 @@ export function createAddonInterface(
           return { streams: [], cacheMaxAge: 0, staleRevalidate: 0 };
         }
 
+        const nntpServers = config.nttpServers.map(({ server }) => server);
         const streams: Stream[] = items.map((item) =>
           itemToStream(item, nntpServers, name)
         );
@@ -67,24 +57,28 @@ export function createAddonInterface(
   );
 
   builder.defineCatalogHandler<NzbHydraAddonConfig>(
-    async ({ config, extra: { search } }) => {
+    async ({ extra: { search } }) => {
       try {
-        if (search == null || search.trim() === "") {
-          console.warn("No search query provided");
+        const searchQuery = search?.trim() || "";
+
+        if (!searchQuery) {
           return { metas: [], cacheMaxAge: 0, staleRevalidate: 0 };
         }
 
-        const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
-        const { channel } = await api.search(search);
-
-        const metas: MetaPreview[] = channel.item.map((item) => ({
-          id: `${catalog.id}:${encodeURIComponent(getNzbUrlFromItem(item))}`,
-          type: "tv",
-          name: item.title,
-          description: item.description,
-        }));
-
-        return { metas, cacheMaxAge: 0, staleRevalidate: 0 };
+        return {
+          metas: [
+            {
+              id: `${catalog.id}:${encodeURIComponent(searchQuery)}`,
+              name: searchQuery,
+              type: "tv",
+              logo: manifest.logo,
+              background: manifest.background,
+              posterShape: "square",
+              poster: manifest.logo,
+              description: `Provides search results from ${manifest.name} for '${search}'`,
+            },
+          ],
+        };
       } catch (err: any) {
         console.error(`Unexpected error in catalog handler: ${err.message}`);
         throw err;
@@ -92,13 +86,33 @@ export function createAddonInterface(
     }
   );
 
-  builder.defineMetaHandler<NzbHydraAddonConfig>(async ({ id }) => {
+  builder.defineMetaHandler<NzbHydraAddonConfig>(async ({ id, config }) => {
     try {
+      if (!id.startsWith(catalog.id + ":")) {
+        return {
+          meta: { id, name: catalog.name, type: "tv" },
+        };
+      }
+
+      const searchQuery = decodeURIComponent(id.replace(catalog.id + ":", ""));
+      const nntpServers = config.nttpServers.map(({ server }) => server);
+      const api = new NZBWebApi(config.indexerUrl, config.indexerApiKey);
+      const { channel } = await api.search(searchQuery);
+      console.log(channel.item?.[0]);
+
       return {
-        meta: { id, name: catalog.name, type: "tv" },
-        cacheMaxAge: 0,
-        staleRevalidate: 0,
-        staleError: 0,
+        meta: {
+          id,
+          name: catalog.name,
+          type: "tv",
+          videos: (channel.item || []).map((item) => ({
+            id: `${catalog.id}:${item.id}`,
+            title: item.title,
+            overview: item.description,
+            released: new Date(item.pubDate).toISOString(),
+            streams: [itemToStream(item, nntpServers, name)],
+          })),
+        },
       };
     } catch (err: any) {
       console.error(`Unexpected error in meta handler: ${err.message}`);
