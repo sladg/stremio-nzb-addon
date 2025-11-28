@@ -46,7 +46,7 @@ export function createAddonInterface(
 
         console.log(`Found ${streams.length} streams for ${type} ${id}`);
 
-        return { streams };
+        return { streams, cacheMaxAge: 3600 };
       } catch (err: any) {
         console.error(`Unexpected error in stream handler: ${err.message}`);
         throw err;
@@ -114,6 +114,7 @@ export function createAddonInterface(
               streams: [itemToStream(item, nntpServers, name)],
             })),
           },
+          cacheMaxAge: 3600,
         };
       } catch (err: any) {
         console.error(`Unexpected error in meta handler: ${err.message}`);
