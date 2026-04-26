@@ -126,10 +126,7 @@ async fn evict_session(registry: &SessionRegistry, cache_root: &Path, token: &st
     let path = cache_root.join(format!("{token}.bin"));
     if let Err(err) = tokio::fs::remove_file(&path).await {
         if err.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                "[gc] failed to delete cache file {}: {err}",
-                path.display()
-            );
+            tracing::warn!("[gc] failed to delete cache file {}: {err}", path.display());
         }
     }
 }
@@ -153,7 +150,10 @@ pub async fn total_disk_bytes(cache_root: &Path) -> u64 {
 }
 
 async fn file_bytes(path: &Path) -> u64 {
-    tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0)
+    tokio::fs::metadata(path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0)
 }
 
 /// Clear all `.bin` files in the cache directory. Called at boot to reap
@@ -254,8 +254,14 @@ mod tests {
         run_once(&registry, &cache_root, &cfg).await;
 
         // Newest survives; older two evicted.
-        assert!(registry.get(&tokens[0]).is_none(), "oldest should be evicted");
-        assert!(registry.get(&tokens[1]).is_none(), "middle should be evicted");
+        assert!(
+            registry.get(&tokens[0]).is_none(),
+            "oldest should be evicted"
+        );
+        assert!(
+            registry.get(&tokens[1]).is_none(),
+            "middle should be evicted"
+        );
         assert!(registry.get(&tokens[2]).is_some(), "newest should survive");
 
         std::fs::remove_dir_all(&cache_root).ok();
@@ -289,7 +295,10 @@ mod tests {
         };
         run_once(&registry, &cache_root, &cfg).await;
 
-        assert!(registry.get(&token).is_some(), "protected session must survive");
+        assert!(
+            registry.get(&token).is_some(),
+            "protected session must survive"
+        );
         std::fs::remove_dir_all(&cache_root).ok();
     }
 

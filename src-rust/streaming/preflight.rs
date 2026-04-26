@@ -240,9 +240,8 @@ async fn probe_candidate_inner(
 /// Returns `(stem_match, volume_number)`. Stem match means the filenames
 /// share the same base name (everything before the extension).
 fn old_style_volume_number(name: &str) -> Option<u32> {
-    static RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?i)\.r(\d{2,3})(?:[^.\w]|$)").expect("rNN regex")
-    });
+    static RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?i)\.r(\d{2,3})(?:[^.\w]|$)").expect("rNN regex"));
     RE.captures(name)
         .and_then(|c| c.get(1)?.as_str().parse::<u32>().ok())
         .map(|n| n + 1) // .r00 is volume 2 (.rar is volume 1)
@@ -353,14 +352,13 @@ async fn probe_rar_inner(
             .min_by_key(|s| s.number)
             .map(|s| s.message_id.clone());
         async move {
-            let msg_id = first_seg
-                .ok_or_else(|| PreflightError::RarHeaderOverflow(idx))?;
+            let msg_id = first_seg.ok_or_else(|| PreflightError::RarHeaderOverflow(idx))?;
             let (_idx, raw) = nntp
                 .fetch_with_failover(0, &msg_id)
                 .await
                 .map_err(|e| PreflightError::NntpFetch(crate::util::redact_log(&e.to_string())))?;
-            let decoded = decode_yenc(&raw)
-                .map_err(|e| PreflightError::Decode(format!("{e:?}")))?;
+            let decoded =
+                decode_yenc(&raw).map_err(|e| PreflightError::Decode(format!("{e:?}")))?;
             if decoded.data.is_empty() {
                 return Err(PreflightError::EmptyPayload);
             }
@@ -377,8 +375,7 @@ async fn probe_rar_inner(
     // first one that decrypts wins. Note: even with the right password, if
     // *file data* is also encrypted (vs just headers), we still can't stream
     // it — the streaming pipeline doesn't decrypt segment payloads.
-    let nzb_passwords: Vec<&str> =
-        nzb.meta.passwords.iter().map(|s| s.as_str()).collect();
+    let nzb_passwords: Vec<&str> = nzb.meta.passwords.iter().map(|s| s.as_str()).collect();
     if !nzb_passwords.is_empty() {
         tracing::info!(
             "[preflight rar] NZB metadata supplies {} password(s)",
@@ -477,7 +474,8 @@ async fn probe_rar_inner(
     if summed != total_video_size {
         tracing::warn!(
             "[preflight rar] data_size sum {} != uncompressed_size {} (filename {target_filename})",
-            summed, total_video_size,
+            summed,
+            total_video_size,
         );
     }
 
@@ -629,7 +627,10 @@ mod tests {
     fn pick_main_chooses_video_over_par2() {
         let xml = nzb_xml(&format!(
             "{}\n{}",
-            file_xml("Movie.2024.1080p.mkv yEnc", &[(1000, 1, "m1@x"), (1000, 2, "m2@x")]),
+            file_xml(
+                "Movie.2024.1080p.mkv yEnc",
+                &[(1000, 1, "m1@x"), (1000, 2, "m2@x")]
+            ),
             file_xml("Movie.par2 yEnc", &[(50, 1, "par@x")])
         ));
         let nzb = Nzb::parse(&xml).unwrap();

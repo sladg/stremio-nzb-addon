@@ -315,8 +315,8 @@ impl AddonConfig {
 pub fn load_from_disk(path: &Path) -> Result<Option<AddonConfig>> {
     match std::fs::read_to_string(path) {
         Ok(contents) => {
-            let mut cfg: AddonConfig = toml::from_str(&contents)
-                .with_context(|| format!("parsing {}", path.display()))?;
+            let mut cfg: AddonConfig =
+                toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
             cfg.normalize();
             Ok(Some(cfg))
         }

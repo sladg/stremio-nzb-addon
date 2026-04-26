@@ -1,83 +1,101 @@
-# Stremio NZB(Hydra 2) Addon
+# Tabellarius
 
-Usenet streaming from [NZBHydra 2](https://github.com/theotherp/nzbhydra2) or your own indexers (Drunken Slug, NZBGeek, nzbplanet, etc.) and NNTP servers for Stremio.
+A Stremio addon that pulls streams from Newznab indexers (Drunken Slug, NZBGeek, nzbplanet, …), validates results against your NNTP provider, and plays releases straight inside Stremio over HTTP — no full download to disk first.
 
-> [!WARNING]
->
-> Usenet support is still experimental in Stremio. Please read the [official announcement](https://blog.stremio.com/stremio-new-stream-sources-usenet-rar-zip-ftp-and-more/) for details.
+From Stremio's perspective it's a normal HTTP stream addon — all the NNTP/yEnc/RAR work happens server-side, so you don't need any experimental Stremio flags or builds.
 
-## Usage
+> _Designed by human, coded by Claude._
 
-New to usenet? See the [The Basics](#the-basics) section below.
+## What it does
 
-### Configuration
+- **Multi-indexer search** — any Newznab API works; all configured indexers are queried in parallel and results merged.
+- **Pre-flight validation** — optional NZB structure check (RAR filename scan) and live NNTP article probe, so dead or missing releases are filtered before Stremio sees them.
+- **Quality gates** — bandwidth window in Gbit/h plus a regex blocklist for unwanted release types.
+- **Language preferences** — ISO codes, full names, or the `original` token (resolves the title's production country to its language via Cinemeta — Korean show → Korean, German movie → German, etc.).
+- **Flat and RARed releases** — bare video NZBs plus uncompressed multi-volume RARs stream directly; compressed or encrypted RARs are rejected at pre-flight.
+- **HTTP range streaming** — segments are fetched on demand from NNTP, decoded, and served as HTTP byte-range responses. Supports seek/scrub. Sparse disk cache with configurable size cap; idle sessions evicted automatically.
+- **Multi-server NNTP failover** — each segment is tried against all configured NNTP servers in order; playback continues if one server is missing an article.
+- **Multi-user with access keys** — share with friends without exposing your indexer or NNTP credentials. Each user gets their own URL key with per-user overrides for languages, quality gates, and indexers. `requireAuth = true` refuses to boot with an empty user list.
 
-The addon requires the following configuration parameters:
+## Quick start
 
-### 1. `indexerUrl` (text)
+```sh
+git clone https://github.com/sladg/stremio-tabellarius-addon.git
+cd stremio-tabellarius-addon
 
-- **Title:** Indexer URL
-- **Description:** The base URL of your indexer or NZBHydra 2 instance.
-- **Required:** Yes
-- **Example:** `https://nzbhydra2.example.com` or `https://api.example.com`
+# Edit the addon_config block at the bottom of docker-compose.yml:
+#   - replace REPLACE_WITH_* with real indexer + NNTP credentials
+#   - replace the access key with your own (`openssl rand -hex 16`)
+$EDITOR docker-compose.yml
 
-### 2. `indexerApiKey` (password)
+docker compose up -d
+docker compose logs -f addon   # check it started cleanly
+```
 
-- **Title:** Indexer API key
-- **Description:** Your indexer or NZBHydra 2 API key.
-- **Required:** Yes
-- **Example:** `abcd1234efgh5678ijkl9012mnop3456`
+## Connect Stremio
 
-### 3. `nntpServers` (text)
+In Stremio, open **Add-ons**, paste this URL into the "Add-on Repository URL" / install field, and click **Install**:
 
-- **Title:** NNTP Servers (comma separated)
-- **Description:** A list of NNTP server addresses to use for downloading NZB files. Format: `nntp(s)://{user}:{pass}@{nntpDomain}:{nntpPort}/{nntpConnections}`. See the [stremio addon SDK docs](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/stream.md) for details.
-- **Required:** Yes
-- **Example:** `nntps://username:password@news.eu.easynews.com/4`
+```
+http://<host>:3000/<access-key>/manifest.json
+```
 
-### The Basics
+`<host>` is `localhost` if Stremio runs on the same machine, otherwise your server's IP or domain. `<access-key>` is the `key = "..."` value you set under `[users.<name>]`.
 
-Usenet is a global distributed discussion system that also serves as a source for binary files and media content. To download content from Usenet, you need access to:
+Once installed, open any movie or TV show — Tabellarius streams appear in the Streams tab alongside any other addons you have configured (Torrentio, Cinemeta, etc.). Click one to play.
 
-1. **An indexer** – This is a service (a multi-indexer like NZBHydra 2 or a standalone indexer like Drunken Slug) that lets you search for NZB files, which describe the content you want to download.
-2. **A provider** – This is a Usenet service (NNTP server) that actually stores and delivers the files. You connect to it using the server address, and often a username and password.
+## Configuration
 
-#### Where to get NNTP servers
+**Everything you configure lives in `config.toml`** — indexers, NNTP servers, users, filters, language preferences. The fully annotated reference (every field, every option, with examples) is in [`config.example.toml`](./config.example.toml).
 
-- **Commercial Usenet providers:** Most users get NNTP server access by subscribing to a Usenet provider. Popular options include [Easynews](https://www.easynews.com/), [Newshosting](https://www.newshosting.com/), [UsenetServer](https://www.usenetserver.com/), [Eweka](https://www.eweka.nl/), and many others. These providers offer paid plans with high retention and speed.
-- **Free servers:** Some ISPs or universities may offer free NNTP access, but these are rare and often limited.
+For Docker users, `config.toml` is inlined as the `addon_config` block at the bottom of [`docker-compose.yml`](./docker-compose.yml). Edit it there and re-run `docker compose up -d` to apply.
 
-**What you need to use this addon:** When you sign up, you’ll receive server addresses, a username, and a password. Enter the server addresses (comma separated if you have multiple servers) in the addon configuration.
+Three sections matter:
 
-#### More Usenet info
+- `[defaults]` — applied to every request: quality window, language preferences, validation toggles, exclusion regex.
+- `[[defaults.indexers]]` / `[[defaults.nntpServers]]` — at least one of each is required.
+- `[users.<name>]` — each user has a friendly map key (used in logs) and a `key = "..."` URL secret. The Stremio install URL becomes `/{key}/manifest.json`. Per-user fields override `[defaults]`.
 
-- Usenet is not the same as torrents or direct downloads. You need a provider and usually a subscription.
-- Retention refers to how long files are kept on the server. Higher retention means more available content.
-- For more details, see guides like [Usenet 101](https://www.usenet.com/what-is-usenet/) or your provider’s help pages.
+Generate access keys with `openssl rand -hex 16`.
 
-## Developers
+### Advanced: runtime env vars (optional)
 
-### Requirements
+`config.toml` covers the addon's behaviour. Env vars are a secondary surface for runtime knobs (cache size, abuse protection, networking) — defaults are sensible, most deployments don't touch them.
 
-- [Node.js](https://nodejs.org/) (v24 or higher is recommended)
-- [PNPM](https://pnpm.io/) package manager v9
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `CACHE_BYTES` | `1073741824` (1 GiB) | streaming cache size cap |
+| `CACHE_DIR` | `/cache` | streaming cache path |
+| `IDLE_TIMEOUT_SECS` | `3600` | idle-session GC threshold |
+| `PROTECT_WINDOW_SECS` | `300` | recently-active sessions immune from cap-eviction |
+| `RATE_LIMIT_PER_MINUTE` | `60` | per-IP request limit (0 disables) |
+| `RATE_LIMIT_BURST` | `30` | leaky-bucket burst size |
+| `BAN_FAILURE_THRESHOLD` | `5` | bad-token rejects before IP ban (0 disables) |
+| `BAN_WINDOW_SECS` | `300` | ban detection window |
+| `BAN_DURATION_SECS` | `3600` | ban duration |
+| `TRUST_PROXY_HEADERS` | unset | set `1` when behind a reverse proxy that strips inbound `X-Forwarded-For` |
+| `BIND_ADDR` | `0.0.0.0` | listen address inside the container |
+| `PORT` | `3000` | listen port |
+| `CONFIG_PATH` | `/config.toml` | config file path |
+| `RUST_LOG` | `info` | tracing filter |
 
-### Installation
+## Public deployments
 
-1. **Clone the repository:**
-   ```zsh
-   git clone https://github.com/sleeyax/stremio-nzb-addon.git
-   cd stremio-nzb-addon
-   ```
-2. **Install dependencies:**
-   ```zsh
-   pnpm install
-   ```
-3. **Run the addon:**
-   ```zsh
-   npm run dev
-   ```
-   The addon will start a local server. Add the manifest URL to Stremio to use the addon.
+If you're exposing the addon beyond your LAN, treat the access keys as bearer tokens — they sit in the URL path and will appear in any HTTP access log along the way.
+
+- **Always run behind TLS.** Path tokens are visible in plaintext over HTTP and in reverse-proxy access logs.
+- **Don't publish port 3000 to the internet.** Bind the host port to localhost only — change `ports: "3000:3000"` to `ports: "127.0.0.1:3000:3000"` in `docker-compose.yml`, and put Caddy / Cloudflare Tunnel / nginx in front of it for TLS termination.
+- **Keep `requireAuth = true`** (default in `config.example.toml`). Boot fails if `[users]` is empty — protects you from accidentally shipping an unauthenticated addon.
+- **Set `TRUST_PROXY_HEADERS=1` only** when your proxy strips the inbound copies of `X-Forwarded-For` / `X-Real-IP`. Otherwise the IP ban / rate limiter sees client-spoofed addresses.
+
+## New to Usenet?
+
+You need two things:
+
+1. **An indexer** — a search service that returns NZB files (release metadata pointing at NNTP articles). Any Newznab-compatible indexer works; popular options include Drunken Slug, NZBGeek, and nzbplanet.
+2. **A provider** — the actual NNTP server that stores and serves the binary segments. Commercial options include Easynews, Newshosting, UsenetServer, and Eweka. You'll get a host, port, username, and password.
+
+Plug both into `docker-compose.yml` and you're set. Higher provider retention = older content stays available.
 
 ## License
 

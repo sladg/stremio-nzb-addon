@@ -121,10 +121,10 @@ pub fn countries_to_languages(blob: &str) -> Vec<String> {
 /// usenet release listings. Adding a new entry is a one-line change.
 fn country_to_language(country: &str) -> Option<&'static str> {
     match country {
-        "United States" | "United Kingdom" | "Canada" | "Australia" | "New Zealand"
-        | "Ireland" | "South Africa" => Some("english"),
-        "Spain" | "Mexico" | "Argentina" | "Colombia" | "Chile" | "Peru" | "Venezuela"
-        | "Cuba" | "Uruguay" => Some("spanish"),
+        "United States" | "United Kingdom" | "Canada" | "Australia" | "New Zealand" | "Ireland"
+        | "South Africa" => Some("english"),
+        "Spain" | "Mexico" | "Argentina" | "Colombia" | "Chile" | "Peru" | "Venezuela" | "Cuba"
+        | "Uruguay" => Some("spanish"),
         "France" | "Belgium" | "Luxembourg" | "Senegal" | "Ivory Coast" => Some("french"),
         "Germany" | "Austria" | "Switzerland" => Some("german"),
         "Italy" => Some("italian"),
@@ -151,9 +151,7 @@ fn country_to_language(country: &str) -> Option<&'static str> {
         "Vietnam" => Some("vietnamese"),
         "Indonesia" => Some("indonesian"),
         "Ukraine" => Some("ukrainian"),
-        "Saudi Arabia" | "Egypt" | "United Arab Emirates" | "Morocco" | "Tunisia" => {
-            Some("arabic")
-        }
+        "Saudi Arabia" | "Egypt" | "United Arab Emirates" | "Morocco" | "Tunisia" => Some("arabic"),
         _ => None,
     }
 }
@@ -214,10 +212,7 @@ mod tests {
     fn country_blob_unknown_skipped() {
         assert_eq!(countries_to_languages("Wakanda"), Vec::<String>::new());
         // Unknown alongside known: only known survives.
-        assert_eq!(
-            countries_to_languages("Wakanda, Japan"),
-            vec!["japanese"]
-        );
+        assert_eq!(countries_to_languages("Wakanda, Japan"), vec!["japanese"]);
     }
 
     #[test]
@@ -231,7 +226,10 @@ mod tests {
     fn expand_replaces_original_token() {
         let pref = vec!["english".into(), "original".into()];
         let originals = vec!["korean".into()];
-        assert_eq!(expand_original(&pref, &originals), vec!["english", "korean"]);
+        assert_eq!(
+            expand_original(&pref, &originals),
+            vec!["english", "korean"]
+        );
     }
 
     #[test]

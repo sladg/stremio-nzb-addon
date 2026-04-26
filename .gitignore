@@ -1,6 +1,4 @@
-node_modules/
 .docker/
-dist/
 data/
 scripts/
 *.code-workspace

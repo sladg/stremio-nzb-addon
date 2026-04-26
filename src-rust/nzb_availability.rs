@@ -150,7 +150,10 @@ async fn probe(
         Err(err) => {
             return AvailabilityResult {
                 ok: false,
-                reason: Some(format!("fetch-failed: {}", crate::util::redact_log(&err.to_string()))),
+                reason: Some(format!(
+                    "fetch-failed: {}",
+                    crate::util::redact_log(&err.to_string())
+                )),
             };
         }
     };
@@ -176,7 +179,10 @@ async fn probe(
         Err(err) => {
             return AvailabilityResult {
                 ok: false,
-                reason: Some(format!("read-failed: {}", crate::util::redact_log(&err.to_string()))),
+                reason: Some(format!(
+                    "read-failed: {}",
+                    crate::util::redact_log(&err.to_string())
+                )),
             };
         }
     };
@@ -193,7 +199,10 @@ async fn probe(
         Err(err) => {
             return AvailabilityResult {
                 ok: false,
-                reason: Some(format!("parse-failed: {}", crate::util::redact_log(&err.to_string()))),
+                reason: Some(format!(
+                    "parse-failed: {}",
+                    crate::util::redact_log(&err.to_string())
+                )),
             };
         }
     };
@@ -293,20 +302,13 @@ pub async fn filter_by_nzb_availability(
     });
     let results: Vec<(Item, AvailabilityResult)> = futures::future::join_all(checks).await;
 
-    let dropped: Vec<&(Item, AvailabilityResult)> =
-        results.iter().filter(|(_, r)| !r.ok).collect();
+    let dropped: Vec<&(Item, AvailabilityResult)> = results.iter().filter(|(_, r)| !r.ok).collect();
 
     if !dropped.is_empty() {
         let preview: Vec<String> = dropped
             .iter()
             .take(20)
-            .map(|(it, r)| {
-                format!(
-                    "\"{}\" ({})",
-                    it.title,
-                    r.reason.as_deref().unwrap_or("?")
-                )
-            })
+            .map(|(it, r)| format!("\"{}\" ({})", it.title, r.reason.as_deref().unwrap_or("?")))
             .collect();
         let suffix = if dropped.len() > 3 { "..." } else { "" };
         tracing::info!(
@@ -331,9 +333,12 @@ pub async fn filter_by_nzb_availability(
 /// timeout. Returns `Ok(true)` on `222`, `Ok(false)` on `430/423`, error
 /// on auth/network failure.
 async fn body_probe(server_url: &str, message_id: &str) -> Result<bool> {
-    timeout(Duration::from_secs(5), body_probe_inner(server_url, message_id))
-        .await
-        .map_err(|_| anyhow!("Connection timeout (5s)"))?
+    timeout(
+        Duration::from_secs(5),
+        body_probe_inner(server_url, message_id),
+    )
+    .await
+    .map_err(|_| anyhow!("Connection timeout (5s)"))?
 }
 
 async fn body_probe_inner(server_url: &str, message_id: &str) -> Result<bool> {

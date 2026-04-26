@@ -96,8 +96,8 @@ impl NntpPool {
     pub fn from_urls(server_urls: Vec<String>) -> Result<Self> {
         let mut pools = Vec::with_capacity(server_urls.len());
         for url in &server_urls {
-            let cfg = parse_server_url(url)
-                .with_context(|| format!("parsing NNTP server URL {url}"))?;
+            let cfg =
+                parse_server_url(url).with_context(|| format!("parsing NNTP server URL {url}"))?;
             pools.push(Arc::new(ConnectionPool::new(Arc::new(cfg))));
         }
         Ok(Self { pools, server_urls })
@@ -134,11 +134,8 @@ impl NntpPool {
             .with_context(|| format!("NNTP acquire on server #{idx}"))?;
 
         let mut pooled = acquired;
-        let result = tokio::time::timeout(
-            Duration::from_secs(30),
-            pooled.conn.fetch_body(message_id),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(Duration::from_secs(30), pooled.conn.fetch_body(message_id)).await;
 
         match result {
             Ok(Ok(resp)) if resp.is_success() => {
@@ -150,8 +147,7 @@ impl NntpPool {
                 // Non-success NNTP code (430, 423, ...). Connection alive,
                 // just this article isn't here. Return Err so caller can
                 // try next server.
-                let err =
-                    anyhow!("NNTP {} for {message_id}: {}", resp.code, resp.message);
+                let err = anyhow!("NNTP {} for {message_id}: {}", resp.code, resp.message);
                 pool.release(pooled);
                 Err(err)
             }
@@ -186,10 +182,7 @@ impl NntpPool {
             match self.fetch_article(idx, message_id).await {
                 Ok(bytes) => return Ok((idx, bytes)),
                 Err(err) => {
-                    tracing::warn!(
-                        "[nntp pool] {} on server #{idx}: {err:#}",
-                        message_id
-                    );
+                    tracing::warn!("[nntp pool] {} on server #{idx}: {err:#}", message_id);
                     last_err = Some(err);
                 }
             }

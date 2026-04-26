@@ -73,7 +73,6 @@ pub struct AttrPair {
 }
 
 pub enum FunctionType {
-    Search,
     Movie,
     TvSearch,
 }
@@ -81,7 +80,6 @@ pub enum FunctionType {
 impl FunctionType {
     fn as_str(&self) -> &'static str {
         match self {
-            FunctionType::Search => "search",
             FunctionType::Movie => "movie",
             FunctionType::TvSearch => "tvsearch",
         }
@@ -97,7 +95,11 @@ pub struct NzbWebApi {
 
 impl NzbWebApi {
     pub fn new(base_url: String, api_key: String, client: reqwest::Client) -> Self {
-        Self { base_url, api_key, client }
+        Self {
+            base_url,
+            api_key,
+            client,
+        }
     }
 
     fn build_url(&self, t: FunctionType) -> Result<Url> {
@@ -112,7 +114,12 @@ impl NzbWebApi {
     }
 
     async fn call(&self, url: Url) -> Result<RssRoot> {
-        let resp = self.client.get(url).timeout(Duration::from_secs(15)).send().await?;
+        let resp = self
+            .client
+            .get(url)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await?;
         let root: RssRoot = resp.json().await?;
         Ok(root)
     }
@@ -138,16 +145,6 @@ impl NzbWebApi {
         let arc = Arc::new(channel);
         RSS_CACHE.insert(cache_key, arc.clone()).await;
         Ok(arc)
-    }
-
-    pub async fn search(&self, query: &str) -> Result<Arc<RssChannel>> {
-        let cache_key = build_cache_key(&self.base_url, "search", query);
-        self.cached_call(cache_key, || async {
-            let mut url = self.build_url(FunctionType::Search)?;
-            url.query_pairs_mut().append_pair("q", query);
-            self.call(url).await
-        })
-        .await
     }
 
     pub async fn search_movie(&self, imdb_id: &str) -> Result<Arc<RssChannel>> {
@@ -218,14 +215,6 @@ impl NzbWebApiPool {
             }
         }
         out
-    }
-
-    pub async fn search(&self, query: &str) -> Vec<Item> {
-        self.fanout(|api| {
-            let q = query.to_string();
-            async move { api.search(&q).await }
-        })
-        .await
     }
 
     pub async fn search_movie(&self, imdb_id: &str) -> Vec<Item> {

@@ -58,6 +58,7 @@ RUN mkdir -p src-rust \
 
 # Layer 2: real source. Only this layer rebuilds when src-rust/ changes.
 COPY src-rust ./src-rust
+COPY assets ./assets
 RUN TARGET="$(cat /tmp/rust-target)" \
     && cargo zigbuild --release --locked --target "$TARGET" \
     && cp "target/$TARGET/release/stremio-nzb-addon" /stremio-nzb-addon

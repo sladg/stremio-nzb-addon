@@ -29,7 +29,9 @@ impl DiskCache {
     /// Open (or create) the cache file for a token.
     pub async fn open(&self, token: &str, total_size: u64) -> Result<Arc<CachedFile>> {
         let path = self.root.join(format!("{token}.bin"));
-        CachedFile::open_or_create(path, total_size).await.map(Arc::new)
+        CachedFile::open_or_create(path, total_size)
+            .await
+            .map(Arc::new)
     }
 }
 

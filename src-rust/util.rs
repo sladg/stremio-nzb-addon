@@ -260,8 +260,7 @@ mod tests {
 
     #[test]
     fn redact_log_handles_multiple_urls() {
-        let msg =
-            "tried https://x.com/?k=v and https://y.com/?k=w both failed";
+        let msg = "tried https://x.com/?k=v and https://y.com/?k=w both failed";
         let redacted = redact_log(msg);
         assert!(!redacted.contains("k=v"));
         assert!(!redacted.contains("k=w"));
@@ -297,17 +296,35 @@ mod tests {
 
     #[test]
     fn detect_language_matches_full_names() {
-        assert_eq!(detect_language("Movie.SPANISH.1080p.WEB-DL.x265-RARBG").as_deref(), Some("spanish"));
-        assert_eq!(detect_language("Movie.GERMAN.1080p.WEB-DL.x265-RARBG").as_deref(), Some("german"));
-        assert_eq!(detect_language("Movie.JAPANESE.1080p.BluRay.x264-RARBG").as_deref(), Some("japanese"));
-        assert_eq!(detect_language("Movie.ENGLISH.1080p.WEB-DL.x265-RARBG").as_deref(), Some("english"));
+        assert_eq!(
+            detect_language("Movie.SPANISH.1080p.WEB-DL.x265-RARBG").as_deref(),
+            Some("spanish")
+        );
+        assert_eq!(
+            detect_language("Movie.GERMAN.1080p.WEB-DL.x265-RARBG").as_deref(),
+            Some("german")
+        );
+        assert_eq!(
+            detect_language("Movie.JAPANESE.1080p.BluRay.x264-RARBG").as_deref(),
+            Some("japanese")
+        );
+        assert_eq!(
+            detect_language("Movie.ENGLISH.1080p.WEB-DL.x265-RARBG").as_deref(),
+            Some("english")
+        );
     }
 
     #[test]
     fn detect_language_multi_takes_precedence() {
         // MULTi.FRENCH should report multi (multi-track pack), not french.
-        assert_eq!(detect_language("Movie.MULTi.FRENCH.1080p.BluRay-RARBG").as_deref(), Some("multi"));
-        assert_eq!(detect_language("Movie.DUAL.1080p.BluRay-RARBG").as_deref(), Some("multi"));
+        assert_eq!(
+            detect_language("Movie.MULTi.FRENCH.1080p.BluRay-RARBG").as_deref(),
+            Some("multi")
+        );
+        assert_eq!(
+            detect_language("Movie.DUAL.1080p.BluRay-RARBG").as_deref(),
+            Some("multi")
+        );
     }
 
     #[test]
@@ -317,8 +334,14 @@ mod tests {
 
     #[test]
     fn detect_language_handles_truefrench_variants() {
-        assert_eq!(detect_language("Movie.TRUEFRENCH.1080p-RARBG").as_deref(), Some("french"));
-        assert_eq!(detect_language("Movie.VFF.1080p-RARBG").as_deref(), Some("french"));
+        assert_eq!(
+            detect_language("Movie.TRUEFRENCH.1080p-RARBG").as_deref(),
+            Some("french")
+        );
+        assert_eq!(
+            detect_language("Movie.VFF.1080p-RARBG").as_deref(),
+            Some("french")
+        );
     }
 
     #[test]

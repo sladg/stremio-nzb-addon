@@ -1,51 +1,35 @@
-use crate::stremio::{
-    BehaviorHintsManifest, CatalogExtra, Manifest, ManifestCatalog, ManifestResource,
-    ManifestResourceDetail,
-};
+use crate::stremio::{BehaviorHintsManifest, Manifest, ManifestResource, ManifestResourceDetail};
 
 /// Stable manifest id, used for binge-group prefixes too.
-pub const ADDON_ID: &str = "io.sladg.nzb";
-pub const ADDON_NAME: &str = "NZB";
+pub const ADDON_ID: &str = "io.sladg.tabellarius";
+pub const ADDON_NAME: &str = "Tabellarius";
 
-pub fn catalog() -> ManifestCatalog {
-    ManifestCatalog {
-        id: "nzb",
-        name: "NZB Search Results",
-        type_: "tv",
-        extra: vec![CatalogExtra { name: "search" }],
-    }
-}
-
-pub fn manifest() -> Manifest {
-    let cat = catalog();
+/// Build the addon manifest with a logo URL anchored at `base_url`
+/// (`https://host` or `http://host`, depending on the request scheme).
+/// Stream-only addon: no `catalog` / `meta` resources — the search +
+/// browse flow uses Cinemeta, and Stremio calls our `/stream/...`
+/// endpoint with whichever IMDB id the user picked.
+pub fn manifest(base_url: &str) -> Manifest {
     Manifest {
-        id: "io.sladg.nzb",
-        name: "NZB",
-        description: "Usenet streams from your NZB indexer(s)",
-        logo: "https://raw.githubusercontent.com/nzbget/nzbget/5e26d52d706f129769e1d620a595c78498ca8cff/webui/img/favicon-256x256.png",
-        version: "3.0.0",
-        resources: vec![
-            ManifestResource::Simple("catalog"),
-            ManifestResource::Detailed(ManifestResourceDetail {
-                name: "meta",
-                types: vec![cat.type_],
-                id_prefixes: Some(vec![cat.id]),
-            }),
-            ManifestResource::Detailed(ManifestResourceDetail {
-                name: "stream",
-                types: vec!["movie", "series", "tv"],
-                id_prefixes: Some(vec!["tt", cat.id]),
-            }),
-        ],
-        types: vec!["movie", "series", "tv"],
-        catalogs: vec![cat],
+        id: ADDON_ID,
+        name: ADDON_NAME,
+        description:
+            "Self-hosted streaming addon for Stremio. Per-user access keys, language preferences, quality gates, and pre-flight stream validation.",
+        logo: format!("{base_url}/logo.svg"),
+        version: "0.0.4",
+        resources: vec![ManifestResource::Detailed(ManifestResourceDetail {
+            name: "stream",
+            types: vec!["movie", "series"],
+            // Limit to IMDB ids — that's what Cinemeta hands out.
+            id_prefixes: Some(vec!["tt"]),
+        })],
+        types: vec!["movie", "series"],
+        catalogs: Vec::new(),
         behavior_hints: Some(BehaviorHintsManifest {
-            // No in-app configure UI anymore; the operator edits config.toml
-            // directly. Stremio renders no "Configure" button when this is
-            // false, which is what we want.
+            // No in-app configure UI; the operator edits config.toml. Stremio
+            // doesn't render a "Configure" button when this is false.
             configurable: false,
             configuration_required: false,
         }),
     }
 }
-

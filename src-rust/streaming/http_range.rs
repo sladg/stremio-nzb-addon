@@ -113,7 +113,10 @@ mod tests {
         );
         assert_eq!(
             parse_range(Some("bytes=100-199"), 1000),
-            Ok(ParsedRange::Partial { start: 100, end: 199 })
+            Ok(ParsedRange::Partial {
+                start: 100,
+                end: 199
+            })
         );
     }
 
@@ -121,7 +124,10 @@ mod tests {
     fn open_ended_range() {
         assert_eq!(
             parse_range(Some("bytes=500-"), 1000),
-            Ok(ParsedRange::Partial { start: 500, end: 999 })
+            Ok(ParsedRange::Partial {
+                start: 500,
+                end: 999
+            })
         );
     }
 
@@ -130,7 +136,10 @@ mod tests {
         // bytes=-100 → last 100 bytes of a 1000-byte resource = [900..999]
         assert_eq!(
             parse_range(Some("bytes=-100"), 1000),
-            Ok(ParsedRange::Partial { start: 900, end: 999 })
+            Ok(ParsedRange::Partial {
+                start: 900,
+                end: 999
+            })
         );
     }
 
@@ -147,7 +156,10 @@ mod tests {
     fn end_clamped_to_total_minus_one() {
         assert_eq!(
             parse_range(Some("bytes=100-9999"), 1000),
-            Ok(ParsedRange::Partial { start: 100, end: 999 })
+            Ok(ParsedRange::Partial {
+                start: 100,
+                end: 999
+            })
         );
     }
 
@@ -202,7 +214,10 @@ mod tests {
 
     #[test]
     fn dashes_only_malformed() {
-        assert_eq!(parse_range(Some("bytes=-"), 1000), Err(RangeError::Malformed));
+        assert_eq!(
+            parse_range(Some("bytes=-"), 1000),
+            Err(RangeError::Malformed)
+        );
     }
 
     #[test]

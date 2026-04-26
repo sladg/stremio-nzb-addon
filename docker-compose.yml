@@ -1,13 +1,106 @@
+# Compose v2 file (run `docker compose up`, not the legacy `docker-compose`).
+#
+# Quick start:
+#   1. Edit the `addon_config` block at the bottom of this file:
+#        - replace REPLACE_WITH_* placeholders with real indexer / NNTP creds
+#        - replace the [users.alice] key with your own (`openssl rand -hex 16`)
+#   2. `docker compose up -d`
+#   3. Watch logs: `docker compose logs -f addon`
+#   4. Add `http://localhost:3000/{access-key}/manifest.json` in Stremio.
+#
+# The full annotated reference (every field, every option) lives in
+# config.example.toml — this file inlines just the essentials.
+
 services:
-  nzbhydra2:
-    container_name: nzbhydra2
-    image: ghcr.io/hotio/nzbhydra2
+  addon:
+    image: sladg/streamer-plugin:latest
+    container_name: stremio-nzb-addon
+    restart: unless-stopped
+    pull_policy: always
+
     ports:
-      - "5076:5076"
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - UMASK=002
-      - TZ=Etc/UTC
+      - "3000:3000"
+
+    configs:
+      # Inline config — edit the `addon_config` block below; rerun
+      # `docker compose up -d` to apply (configs are recreated on up).
+      - source: addon_config
+        target: /config.toml
+
     volumes:
-      - .docker/config:/config
+      # Disk cache for streamed segments. Bind-mount so you can `du -sh`
+      # from the host. Switch to a named volume in production deployments.
+      - ./cache:/cache
+
+    environment:
+      # The defaults in the Dockerfile already cover BIND_ADDR=0.0.0.0,
+      # PORT=3000, CONFIG_PATH=/config.toml, CACHE_DIR=/cache.
+      # Override anything below as needed.
+
+      # Tracing — drop to `warn` in production, `debug` for deep diagnostics.
+      RUST_LOG: "info,stremio_nzb_addon::streaming=info"
+
+      # Cache cap (default 1 GiB). Bump this for full-movie playback
+      # without mid-stream eviction. Example: 10 GiB.
+      # CACHE_BYTES: "10737418240"
+
+      # Idle session GC threshold. Default 1 h is fine for typical use.
+      # IDLE_TIMEOUT_SECS: "3600"
+
+      # Sessions accessed within this window are protected from
+      # cap-eviction (= "playing right now"). Default 5 min.
+      # PROTECT_WINDOW_SECS: "300"
+
+    # No docker-level healthcheck: scratch image has no shell / no curl,
+    # so HEALTHCHECK can't run. K8s should use an HTTP probe against
+    # /health instead (handled at the kubelet, not inside the container).
+
+configs:
+  # Inline TOML — see config.example.toml for the fully-annotated reference.
+  # After editing, `docker compose up -d` to recreate the config + container.
+  addon_config:
+    content: |
+      # Refuse to start if [users] is empty. Hard guard against shipping an
+      # unauthenticated addon to a public endpoint by mistake.
+      requireAuth = true
+
+      [defaults]
+      # Bandwidth window in Gbit/h (≈25 SD, ≈50 1080p, ≈100 4K).
+      minGbitPerHour = 5.0
+      maxGbitPerHour = 30.0
+
+      # Drop releases whose title matches this regex (case-insensitive).
+      excludeRegex = '\b(av1|hdr|dolby[\s.\-_]?vision|cam|hdcam|hdts|telesync|10[\s.\-_]?bit)\b'
+
+      # Pre-flight checks — set both `false` for fastest results, both
+      # `true` for strictest filtering (only NZBs that actually play).
+      validateNzbStructure = true
+      validateNzbAvailability = true
+
+      # Streams returned per (resolution, language) bucket: 1 strict, 2 balanced.
+      streamsPerResolution = 2
+
+      # Audio language preferences. "original" = look up the title's
+      # original audio via Cinemeta. ISO codes ("en", "cs") also work.
+      preferredLanguages = ["original", "english"]
+
+      # ─── Indexers (Newznab-compatible — at least one required) ─────────
+      [[defaults.indexers]]
+      url = "https://api.example-indexer.net"
+      apiKey = "REPLACE_WITH_REAL_INDEXER_API_KEY"
+
+      # [[defaults.indexers]]
+      # url = "https://api.another-indexer.net"
+      # apiKey = "REPLACE_WITH_REAL_INDEXER_API_KEY"
+
+      # ─── NNTP servers (at least one required) ──────────────────────────
+      # Format: nntps://user:password@host:port/connections
+      [[defaults.nntpServers]]
+      server = "nntps://REPLACE_USER:REPLACE_PASS@news.example.com:563/20"
+
+      # ─── Users ─────────────────────────────────────────────────────────
+      # Each user has a friendly map key (logs) + `key = "..."` URL secret.
+      # Generate with: openssl rand -hex 16
+      # Stremio install URL: http://HOST:3000/{key}/manifest.json
+      [users.alice]
+      key = "REPLACE_WITH_GENERATED_ACCESS_KEY"

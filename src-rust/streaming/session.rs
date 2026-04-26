@@ -65,11 +65,11 @@ pub fn new_token() -> String {
 ///
 /// Phase 5 entry point. Caller groups candidates upstream via
 /// `streaming::candidate::group_candidates` and passes one bucket per call.
-pub fn register_group(
-    registry: &SessionRegistry,
-    candidates: Vec<NzbCandidate>,
-) -> String {
-    debug_assert!(!candidates.is_empty(), "register_group called with empty list");
+pub fn register_group(registry: &SessionRegistry, candidates: Vec<NzbCandidate>) -> String {
+    debug_assert!(
+        !candidates.is_empty(),
+        "register_group called with empty list"
+    );
     let token = new_token();
     let now = now_ms();
     let session = Arc::new(StreamSession {
@@ -129,9 +129,10 @@ impl FileLayout {
     /// stream" byte position, returning `None` if `video_byte` is past the
     /// end of all chunks.
     pub fn video_to_assembled(&self, video_byte: u64) -> Option<u64> {
-        let chunk = self.chunks.iter().find(|c| {
-            video_byte >= c.video_start && video_byte < c.video_start + c.length
-        })?;
+        let chunk = self
+            .chunks
+            .iter()
+            .find(|c| video_byte >= c.video_start && video_byte < c.video_start + c.length)?;
         Some(chunk.assembled_start + (video_byte - chunk.video_start))
     }
 
@@ -235,11 +236,7 @@ mod tests {
         // V1: assembled [0..120) (header 20 bytes + data 100 bytes), data [20..120)
         // V2: assembled [120..240) (header 20 + data 100), data [140..240)
         // V3: assembled [240..360) (header 20 + data 100), data [260..360)
-        let layout = layout_with_chunks(vec![
-            (0, 100, 20),
-            (100, 100, 140),
-            (200, 100, 260),
-        ]);
+        let layout = layout_with_chunks(vec![(0, 100, 20), (100, 100, 140), (200, 100, 260)]);
         assert_eq!(layout.video_to_assembled(0), Some(20)); // start of vol1 data
         assert_eq!(layout.video_to_assembled(99), Some(119));
         assert_eq!(layout.video_to_assembled(100), Some(140)); // start of vol2 data
@@ -268,6 +265,9 @@ mod tests {
         assert_eq!(guess_content_type("oldschool.avi"), "video/x-msvideo");
         assert_eq!(guess_content_type("stream.webm"), "video/webm");
         assert_eq!(guess_content_type("broadcast.ts"), "video/mp2t");
-        assert_eq!(guess_content_type("noextension"), "application/octet-stream");
+        assert_eq!(
+            guess_content_type("noextension"),
+            "application/octet-stream"
+        );
     }
 }

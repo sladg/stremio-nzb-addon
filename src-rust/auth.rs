@@ -69,12 +69,8 @@ pub async fn require_access_token(
             drop(cfg);
             // Determine the client IP for the ban tracker. Honors
             // `TRUST_PROXY_HEADERS=1` for behind-a-proxy setups.
-            let ip = crate::client_ip(
-                request.headers(),
-                Some(&addr),
-                state.trust_proxy_headers,
-            )
-            .unwrap_or(addr.ip());
+            let ip = crate::client_ip(request.headers(), Some(&addr), state.trust_proxy_headers)
+                .unwrap_or(addr.ip());
             let triggered = state.ban_list.record_failure(ip);
             // 8-char prefix in the reject log so token typos can be
             // diagnosed without the full secret showing up.

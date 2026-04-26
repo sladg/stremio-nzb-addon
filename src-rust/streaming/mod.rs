@@ -14,7 +14,6 @@
 //! should use targeted `#[allow(dead_code)]` on the specific item until it's
 //! wired up.
 
-
 pub mod candidate;
 pub mod disk_cache;
 pub mod gc;

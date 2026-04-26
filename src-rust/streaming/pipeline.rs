@@ -250,8 +250,7 @@ async fn ensure_segment_cached(
         return Ok(());
     }
 
-    Err(last_err
-        .unwrap_or_else(|| anyhow!("no NNTP servers available for {}", seg.message_id)))
+    Err(last_err.unwrap_or_else(|| anyhow!("no NNTP servers available for {}", seg.message_id)))
 }
 
 #[cfg(test)]

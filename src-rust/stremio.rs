@@ -5,7 +5,10 @@ pub struct Manifest {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    pub logo: &'static str,
+    /// Built per-request from the addon's base URL so the logo route
+    /// resolves correctly behind any reverse proxy. Hence `String`,
+    /// not `&'static str`.
+    pub logo: String,
     pub version: &'static str,
     pub resources: Vec<ManifestResource>,
     pub types: Vec<&'static str>,
@@ -83,54 +86,4 @@ pub struct StreamsResponse {
     pub streams: Vec<Stream>,
     #[serde(rename = "cacheMaxAge")]
     pub cache_max_age: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CatalogResponse {
-    pub metas: Vec<MetaPreview>,
-    #[serde(rename = "cacheMaxAge", skip_serializing_if = "Option::is_none")]
-    pub cache_max_age: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MetaPreview {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logo: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background: Option<&'static str>,
-    #[serde(rename = "posterShape", skip_serializing_if = "Option::is_none")]
-    pub poster_shape: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub poster: Option<&'static str>,
-    pub description: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MetaResponse {
-    pub meta: Meta,
-    #[serde(rename = "cacheMaxAge", skip_serializing_if = "Option::is_none")]
-    pub cache_max_age: Option<u64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Meta {
-    pub id: String,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub videos: Option<Vec<MetaVideo>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MetaVideo {
-    pub id: String,
-    pub title: String,
-    pub overview: String,
-    pub released: String,
-    pub streams: Vec<Stream>,
 }

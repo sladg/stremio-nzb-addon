@@ -273,7 +273,7 @@ pub async fn build_streams(
     type_: String,
     id: String,
     client: reqwest::Client,
-    host: &str,
+    base_url: &str,
     sessions: &SessionRegistry,
 ) -> Vec<Stream> {
     // `_cfg` is unused right now — kept in the signature so future
@@ -308,7 +308,12 @@ pub async fn build_streams(
     if (user.min_gbit_per_hour.is_some() || user.max_gbit_per_hour.is_some())
         && (type_ == "movie" || type_ == "series")
     {
-        items = filter_by_quality(items, user.min_gbit_per_hour, user.max_gbit_per_hour, &type_);
+        items = filter_by_quality(
+            items,
+            user.min_gbit_per_hour,
+            user.max_gbit_per_hour,
+            &type_,
+        );
     }
 
     items = filter_by_title_regex(items, user.exclude_regex.as_deref());
@@ -366,7 +371,7 @@ pub async fn build_streams(
             // full group; auto-fallback is invisible to Stremio.
             let display_item = group[0].item.clone();
             let token = register_group(sessions, group);
-            let url = format!("http://{host}/v/{token}.mkv");
+            let url = format!("{base_url}/v/{token}.mkv");
             item_to_stream(&display_item, ADDON_NAME, ADDON_ID, url, &originals)
         })
         .collect();
@@ -529,8 +534,12 @@ mod tests {
             vec![candidate_from_item(item("Movie.1994.1080p.WEB-DL.x265-A"))],
             vec![candidate_from_item(item("Movie.1994.1080p.WEB-DL.x265-B"))],
             vec![candidate_from_item(item("Movie.1994.1080p.WEB-DL.x265-C"))],
-            vec![candidate_from_item(item("Movie.1994.MULTi.1080p.BluRay.x264-FHD"))],
-            vec![candidate_from_item(item("Movie.1994.DUAL.1080p.BluRay-USELESS"))],
+            vec![candidate_from_item(item(
+                "Movie.1994.MULTi.1080p.BluRay.x264-FHD",
+            ))],
+            vec![candidate_from_item(item(
+                "Movie.1994.DUAL.1080p.BluRay-USELESS",
+            ))],
         ];
         // MULTi and DUAL both signature as language="multi" — same bucket.
         // Result: 2 untagged + 2 multi = 4 (cap=2 per (res, lang)).
@@ -563,7 +572,13 @@ mod tests {
     fn stream_json_uses_url_not_nzburl_or_servers() {
         // Ensure the Phase 3 contract change is reflected in the wire format.
         let it = item("Movie.2024.1080p.WEB-DL.x265-RARBG.mkv");
-        let s = item_to_stream(&it, "NZB", "io.sladg.nzb", "http://h/v/T.mkv".to_string(), &[]);
+        let s = item_to_stream(
+            &it,
+            "NZB",
+            "io.sladg.nzb",
+            "http://h/v/T.mkv".to_string(),
+            &[],
+        );
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""url":"http://h/v/T.mkv""#));
         assert!(!json.contains("nzbUrl"));

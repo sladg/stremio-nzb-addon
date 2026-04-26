@@ -184,19 +184,21 @@ mod tests {
         ];
         let out = filter_by_quality(items, Some(0.0), None, "movie");
         // Sorted by ascending bandwidth: low → mid → high
-        assert_eq!(out.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(),
-                   vec!["a-low", "b-mid", "c-high"]);
+        assert_eq!(
+            out.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(),
+            vec!["a-low", "b-mid", "c-high"]
+        );
     }
 
     #[test]
     fn filter_by_quality_uses_runtime_when_available() {
         // Same size, different runtimes -> different bandwidths
         let items = vec![
-            item_with("short", 5 * 1024 * 1024 * 1024, Some(60)),  // higher bw
-            item_with("long", 5 * 1024 * 1024 * 1024, Some(180)),  // lower bw
+            item_with("short", 5 * 1024 * 1024 * 1024, Some(60)), // higher bw
+            item_with("long", 5 * 1024 * 1024 * 1024, Some(180)), // lower bw
         ];
         let out = filter_by_quality(items, Some(0.0), None, "movie");
-        assert_eq!(out[0].title, "long");  // sorted ascending
+        assert_eq!(out[0].title, "long"); // sorted ascending
         assert_eq!(out[1].title, "short");
     }
 }

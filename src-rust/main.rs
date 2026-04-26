@@ -1,6 +1,5 @@
 mod auth;
 mod cache;
-mod catalog;
 mod cinemeta;
 mod config;
 mod content_filter;
@@ -24,13 +23,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, Path, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::get,
     Router,
 };
-use serde::Deserialize;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -252,6 +250,32 @@ async fn main() {
 /// without `TRUST_PROXY_HEADERS=1` it's the proxy and every request
 /// looks like the same IP, which collapses bans to "the proxy ip,"
 /// which is still wrong but fail-safe).
+/// Build the base URL the addon should emit for stream/video links.
+/// Honors `X-Forwarded-Proto` when `TRUST_PROXY_HEADERS=1` so that
+/// running behind a TLS terminator (Tailscale Funnel, Caddy, CF Tunnel,
+/// nginx, …) emits `https://...` URLs that don't get blocked by mixed
+/// content rules or rejected by HTTPS-only edge gateways.
+///
+/// Falls back to `http` when no proxy header is present (or the proxy
+/// isn't trusted), and to `localhost` when no Host header is present.
+pub fn request_base_url(headers: &axum::http::HeaderMap, trust_proxy: bool) -> String {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    let scheme = if trust_proxy {
+        headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(',').next().unwrap_or(s).trim())
+            .filter(|s| *s == "http" || *s == "https")
+            .unwrap_or("http")
+    } else {
+        "http"
+    };
+    format!("{scheme}://{host}")
+}
+
 pub fn client_ip(
     headers: &axum::http::HeaderMap,
     connect_info: Option<&SocketAddr>,
@@ -287,8 +311,8 @@ async fn ban_check_middleware(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, StatusCode> {
-    let ip = client_ip(request.headers(), Some(&addr), state.trust_proxy_headers)
-        .unwrap_or(addr.ip());
+    let ip =
+        client_ip(request.headers(), Some(&addr), state.trust_proxy_headers).unwrap_or(addr.ip());
     if state.ban_list.is_banned(ip) {
         tracing::warn!("[ban] reject banned ip={ip} path={}", request.uri().path());
         return Err(StatusCode::FORBIDDEN);
@@ -310,14 +334,12 @@ fn build_router(state: Arc<AppState>) -> Router {
 
     let addon_routes: Router<Arc<AppState>> = Router::new()
         .route("/manifest.json", get(manifest_route))
-        .route("/stream/{type}/{id}", get(stream_route))
-        .route("/catalog/{type}/{id}", get(catalog_route_no_extra))
-        .route("/catalog/{type}/{id}/{extra}", get(catalog_route_extra))
-        .route("/meta/{type}/{id}", get(meta_route));
+        .route("/stream/{type}/{id}", get(stream_route));
 
     let always_routes: Router<Arc<AppState>> = Router::new()
         .route("/v/{token}", get(video_route))
-        .route("/health", get(healthcheck::health));
+        .route("/health", get(healthcheck::health))
+        .route("/logo.svg", get(logo_route));
 
     // Per-IP rate limit on addon routes. Skip /v/... (range requests during
     // playback) and /health (k8s probes). Disabled when
@@ -351,9 +373,7 @@ fn build_router(state: Arc<AppState>) -> Router {
                 limiter.retain_recent();
             }
         });
-        tracing::info!(
-            "[rate-limit] enabled: ~{rate_per_minute} req/min per IP, burst {burst}"
-        );
+        tracing::info!("[rate-limit] enabled: ~{rate_per_minute} req/min per IP, burst {burst}");
         addon_routes.layer(GovernorLayer::new(governor_config))
     } else {
         tracing::info!("[rate-limit] disabled (set RATE_LIMIT_PER_MINUTE>0 to enable)");
@@ -388,12 +408,37 @@ fn build_router(state: Arc<AppState>) -> Router {
         ))
 }
 
-async fn manifest_route() -> impl IntoResponse {
-    let m: Manifest = manifest::manifest();
+async fn manifest_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Build the manifest with a logo URL anchored at this request's
+    // origin so the icon resolves correctly regardless of which proxy
+    // is in front (Tailscale, Caddy, Cloudflare, none).
+    let base_url = request_base_url(&headers, state.trust_proxy_headers);
+    let m: Manifest = manifest::manifest(&base_url);
     let mut resp = axum::Json(m).into_response();
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=3600"),
+    );
+    resp
+}
+
+/// Serve the embedded SVG logo. Public, no auth — Stremio fetches it
+/// from whatever URL the manifest advertises, which is at root level
+/// regardless of the per-user prefix.
+async fn logo_route() -> impl IntoResponse {
+    const LOGO_BYTES: &[u8] = include_bytes!("../assets/logo.svg");
+    let mut resp = (StatusCode::OK, LOGO_BYTES).into_response();
+    let h = resp.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("image/svg+xml"),
+    );
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=86400, immutable"),
     );
     resp
 }
@@ -413,11 +458,7 @@ async fn stream_route(
     user: Option<Extension<UserName>>,
     Path(params): Path<HashMap<String, String>>,
 ) -> axum::Json<crate::stremio::StreamsResponse> {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost")
-        .to_string();
+    let base_url = request_base_url(&headers, state.trust_proxy_headers);
     let type_ = path_param(&params, "type").to_string();
     let id = strip_json_suffix(path_param(&params, "id")).to_string();
     let cfg = state.cfg.read().await;
@@ -429,7 +470,7 @@ async fn stream_route(
         type_,
         id,
         state.http.clone(),
-        &host,
+        &base_url,
         &state.sessions,
     )
     .await;
@@ -437,55 +478,6 @@ async fn stream_route(
         streams,
         cache_max_age: 3600,
     })
-}
-
-#[derive(Deserialize, Default)]
-struct CatalogQuery {
-    search: Option<String>,
-}
-
-async fn catalog_route_no_extra(
-    Path(_params): Path<HashMap<String, String>>,
-    Query(q): Query<CatalogQuery>,
-) -> axum::Json<crate::stremio::CatalogResponse> {
-    axum::Json(catalog::handle_catalog(q.search.as_deref()))
-}
-
-async fn catalog_route_extra(
-    Path(params): Path<HashMap<String, String>>,
-    Query(q): Query<CatalogQuery>,
-) -> axum::Json<crate::stremio::CatalogResponse> {
-    let extra = path_param(&params, "extra").to_string();
-    let search = q.search.or_else(|| {
-        let extra = strip_json_suffix(&extra);
-        extra
-            .split('&')
-            .find_map(|kv| kv.strip_prefix("search="))
-            .map(|s| {
-                urlencoding::decode(s)
-                    .map(|c| c.into_owned())
-                    .unwrap_or_else(|_| s.to_string())
-            })
-    });
-    axum::Json(catalog::handle_catalog(search.as_deref()))
-}
-
-async fn meta_route(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    user: Option<Extension<UserName>>,
-    Path(params): Path<HashMap<String, String>>,
-) -> axum::Json<crate::stremio::MetaResponse> {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost")
-        .to_string();
-    let id = strip_json_suffix(path_param(&params, "id")).to_string();
-    let cfg = state.cfg.read().await;
-    let user_name = user.as_ref().map(|u| u.0 .0.as_str());
-    let user_cfg = cfg.resolve(user_name);
-    axum::Json(catalog::handle_meta(&user_cfg, id, state.http.clone(), &host, &state.sessions).await)
 }
 
 fn strip_json_suffix(s: &str) -> &str {
@@ -510,13 +502,15 @@ fn build_nntp_pool(cfg: &AddonConfig) -> Option<Arc<NntpPool>> {
     if cfg.defaults.nntp_servers.is_empty() {
         return None;
     }
-    let urls: Vec<String> = cfg.defaults.nntp_servers.iter().map(|s| s.server.clone()).collect();
+    let urls: Vec<String> = cfg
+        .defaults
+        .nntp_servers
+        .iter()
+        .map(|s| s.server.clone())
+        .collect();
     match NntpPool::from_urls(urls) {
         Ok(pool) => {
-            tracing::info!(
-                "[nntp pool] built {} server pool(s)",
-                pool.server_count()
-            );
+            tracing::info!("[nntp pool] built {} server pool(s)", pool.server_count());
             Some(Arc::new(pool))
         }
         Err(err) => {
@@ -613,9 +607,8 @@ async fn video_route(
                     }
                 }
             }
-            Err(last_err.unwrap_or_else(|| {
-                crate::streaming::preflight::PreflightError::NoPlayableFile
-            }))
+            Err(last_err
+                .unwrap_or_else(|| crate::streaming::preflight::PreflightError::NoPlayableFile))
         })
         .await
         .map_err(|e| {

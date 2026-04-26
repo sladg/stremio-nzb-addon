@@ -110,7 +110,10 @@ async fn probe_nzb(client: &reqwest::Client, nzb_url: &str) -> SanityResult {
         };
     }
 
-    SanityResult { ok: true, reason: None }
+    SanityResult {
+        ok: true,
+        reason: None,
+    }
 }
 
 pub async fn filter_by_nzb_sanity(client: &reqwest::Client, items: Vec<Item>) -> Vec<Item> {
@@ -129,20 +132,13 @@ pub async fn filter_by_nzb_sanity(client: &reqwest::Client, items: Vec<Item>) ->
     });
     let results: Vec<(Item, SanityResult)> = futures::future::join_all(checks).await;
 
-    let dropped: Vec<&(Item, SanityResult)> =
-        results.iter().filter(|(_, s)| !s.ok).collect();
+    let dropped: Vec<&(Item, SanityResult)> = results.iter().filter(|(_, s)| !s.ok).collect();
 
     if !dropped.is_empty() {
         let preview: Vec<String> = dropped
             .iter()
             .take(20)
-            .map(|(it, s)| {
-                format!(
-                    "\"{}\" ({})",
-                    it.title,
-                    s.reason.as_deref().unwrap_or("?")
-                )
-            })
+            .map(|(it, s)| format!("\"{}\" ({})", it.title, s.reason.as_deref().unwrap_or("?")))
             .collect();
         let suffix = if dropped.len() > 3 { "..." } else { "" };
         tracing::info!(
