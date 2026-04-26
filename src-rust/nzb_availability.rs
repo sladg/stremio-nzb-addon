@@ -9,15 +9,22 @@
 //! Coverage is **strict AND across servers** — every server must have every
 //! canary article, matching Stremio's NZB engine's real fall-back behavior.
 
+use anyhow::{anyhow, Result};
 use nzb_rs::{File, Nzb};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
+use tokio_rustls::TlsConnector;
+use url::Url;
 
 use crate::cache::AVAILABILITY_CACHE;
-use crate::healthcheck::body_probe;
 use crate::nzb_api::{item_nzb_url, Item};
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -316,6 +323,160 @@ pub async fn filter_by_nzb_availability(
         .filter(|(_, r)| r.ok)
         .map(|(it, _)| it)
         .collect()
+}
+
+/// NNTP `BODY` probe of a single message-id. Opens a fresh connection
+/// each time (no pooling — probes fire infrequently and we want each
+/// check to reflect the current connection state of the server). 5s
+/// timeout. Returns `Ok(true)` on `222`, `Ok(false)` on `430/423`, error
+/// on auth/network failure.
+async fn body_probe(server_url: &str, message_id: &str) -> Result<bool> {
+    timeout(Duration::from_secs(5), body_probe_inner(server_url, message_id))
+        .await
+        .map_err(|_| anyhow!("Connection timeout (5s)"))?
+}
+
+async fn body_probe_inner(server_url: &str, message_id: &str) -> Result<bool> {
+    let url = Url::parse(server_url)?;
+    let secure = url.scheme() == "nntps";
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("missing host"))?
+        .to_string();
+    let port = url.port().unwrap_or(if secure { 563 } else { 119 });
+    let username = urlencoding::decode(url.username())?.into_owned();
+    let password = urlencoding::decode(url.password().unwrap_or(""))?.into_owned();
+
+    let tcp = TcpStream::connect((host.as_str(), port)).await?;
+
+    if secure {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let mut tls_cfg = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        tls_cfg
+            .dangerous()
+            .set_certificate_verifier(Arc::new(NoVerify));
+        let connector = TlsConnector::from(Arc::new(tls_cfg));
+        let server_name = rustls::pki_types::ServerName::try_from(host.clone())
+            .map_err(|_| anyhow!("invalid server name"))?;
+        let stream = connector.connect(server_name, tcp).await?;
+        run_body_probe(stream, &username, &password, message_id).await
+    } else {
+        run_body_probe(tcp, &username, &password, message_id).await
+    }
+}
+
+async fn run_body_probe<S>(
+    mut stream: S,
+    username: &str,
+    password: &str,
+    message_id: &str,
+) -> Result<bool>
+where
+    S: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    let mut buf = String::new();
+    let mut tmp = [0u8; 1024];
+    let mut authenticated = username.is_empty() && password.is_empty();
+
+    loop {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            return Err(anyhow!("Connection closed unexpectedly"));
+        }
+        buf.push_str(std::str::from_utf8(&tmp[..n])?);
+
+        while let Some(idx) = buf.find("\r\n") {
+            let line = buf[..idx].to_string();
+            buf.drain(..idx + 2);
+
+            let code: u16 = line.get(..3).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+            if (code == 200 || code == 201) && !authenticated {
+                if !username.is_empty() && !password.is_empty() {
+                    stream
+                        .write_all(format!("AUTHINFO USER {username}\r\n").as_bytes())
+                        .await?;
+                } else {
+                    authenticated = true;
+                    stream
+                        .write_all(format!("BODY <{message_id}>\r\n").as_bytes())
+                        .await?;
+                }
+            } else if code == 381 {
+                stream
+                    .write_all(format!("AUTHINFO PASS {password}\r\n").as_bytes())
+                    .await?;
+            } else if code == 281 {
+                authenticated = true;
+                stream
+                    .write_all(format!("BODY <{message_id}>\r\n").as_bytes())
+                    .await?;
+            } else if (480..490).contains(&code) {
+                return Err(anyhow!("Authentication failed: {line}"));
+            } else if code == 222 {
+                // Article exists; drop socket without reading body.
+                return Ok(true);
+            } else if code == 430 || code == 423 {
+                // No such article (430) / no article with that number (423).
+                return Ok(false);
+            } else if code >= 500 {
+                return Err(anyhow!("Server error: {line}"));
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct NoVerify;
+
+impl rustls::client::danger::ServerCertVerifier for NoVerify {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        use rustls::SignatureScheme::*;
+        vec![
+            RSA_PKCS1_SHA256,
+            RSA_PKCS1_SHA384,
+            RSA_PKCS1_SHA512,
+            ECDSA_NISTP256_SHA256,
+            ECDSA_NISTP384_SHA384,
+            ECDSA_NISTP521_SHA512,
+            RSA_PSS_SHA256,
+            RSA_PSS_SHA384,
+            RSA_PSS_SHA512,
+            ED25519,
+        ]
+    }
 }
 
 #[cfg(test)]

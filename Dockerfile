@@ -1,79 +1,81 @@
 # syntax=docker/dockerfile:1.6
 #
-# Multi-stage build for the Rust addon binary.
-# - Builder: rust:1.93-bookworm with cached cargo registry + target dir.
-# - Runtime: debian:bookworm-slim (~80 MB final image).
+# Multi-stage build that produces a single static musl binary on a
+# `scratch` base — final image is just the binary, nothing else.
 #
-# Why debian-slim and not distroless: keeps a shell + curl available for
-# debugging via `docker exec` and lets compose health-check via curl.
+# Build for both linux/amd64 and linux/arm64 in one shot:
+#   docker buildx build --platform linux/amd64,linux/arm64 -t … --push .
+#
+# Cross-compilation uses cargo-zigbuild (zig as the C linker), so the
+# builder always runs on the build host's native arch — no QEMU needed,
+# both targets cross-compile fast.
 
 ARG RUST_VERSION=1.93
+ARG ZIG_VERSION=0.13.0
 
-# ---------- builder ----------
-FROM rust:${RUST_VERSION}-bookworm AS builder
+# ---------- builder (always native to the build host) ----------
+FROM --platform=$BUILDPLATFORM rust:${RUST_VERSION}-bookworm AS builder
 
+ARG TARGETARCH
+ARG ZIG_VERSION
 WORKDIR /build
 
-# `aws-lc-rs` (rustls' default crypto provider) builds a small amount of C
-# at compile time. cmake + a C compiler cover everything it needs.
+# cmake/clang for aws-lc-rs (rustls' default crypto provider — small C code).
+# curl + xz-utils to fetch zig.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends cmake clang \
+    && apt-get install -y --no-install-recommends cmake clang curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Layer 1: cache dependency builds. We copy only the manifests, then build
-# a placeholder binary so cargo materializes the registry + ~all crates.
-# Subsequent edits to src-rust/ skip this layer entirely.
+# Zig: provides libc + linker for musl cross-compilation. cargo-zigbuild
+# wires it into the cargo invocation so any target works without a
+# per-target gcc cross-toolchain.
+RUN ZIG_ARCH="$(uname -m)" \
+    && curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz" \
+        | tar -xJ -C /opt \
+    && ln -s "/opt/zig-linux-${ZIG_ARCH}-${ZIG_VERSION}/zig" /usr/local/bin/zig
+
+RUN cargo install --locked cargo-zigbuild
+
+# Map docker's TARGETARCH to a Rust target triple. Both arches produce
+# fully-static musl binaries that run on `scratch`.
+RUN case "$TARGETARCH" in \
+        amd64) echo "x86_64-unknown-linux-musl"  > /tmp/rust-target ;; \
+        arm64) echo "aarch64-unknown-linux-musl" > /tmp/rust-target ;; \
+        *) echo "unsupported TARGETARCH=$TARGETARCH"; exit 1 ;; \
+    esac \
+    && rustup target add "$(cat /tmp/rust-target)"
+
+# Layer 1: dep-cache build with a placeholder src so cargo materializes
+# the registry + ~all crates. Subsequent edits to src-rust/ skip this.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src-rust \
-    && echo 'fn main() { println!("dependency-cache placeholder"); }' > src-rust/main.rs \
-    && cargo build --release --locked \
-    && rm -f src-rust/main.rs target/release/stremio-nzb-addon \
-    && rm -rf target/release/deps/stremio_nzb_addon-* target/release/.fingerprint/stremio-nzb-addon-*
+    && echo 'fn main() { println!("placeholder"); }' > src-rust/main.rs \
+    && TARGET="$(cat /tmp/rust-target)" \
+    && cargo zigbuild --release --locked --target "$TARGET" \
+    && rm -f src-rust/main.rs "target/$TARGET/release/stremio-nzb-addon" \
+    && rm -rf "target/$TARGET/release/deps/stremio_nzb_addon-"* \
+              "target/$TARGET/release/.fingerprint/stremio-nzb-addon-"*
 
 # Layer 2: real source. Only this layer rebuilds when src-rust/ changes.
 COPY src-rust ./src-rust
-RUN cargo build --release --locked \
-    && strip target/release/stremio-nzb-addon
+RUN TARGET="$(cat /tmp/rust-target)" \
+    && cargo zigbuild --release --locked --target "$TARGET" \
+    && cp "target/$TARGET/release/stremio-nzb-addon" /stremio-nzb-addon
 
-# ---------- runtime ----------
-FROM debian:bookworm-slim AS runtime
+# ---------- runtime: scratch ----------
+# No shell, no libc, no ca-certs (webpki-roots is bundled in the binary).
+# DNS works because Docker / kubelet bind-mount /etc/resolv.conf at start.
+FROM scratch AS runtime
 
-# ca-certificates for HTTPS to indexers (reqwest/rustls uses webpki-roots
-# bundled into the binary, but having the system bundle on the box is
-# cheap insurance for any future http client we might add).
-# curl present for the compose health-check.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl tini \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /stremio-nzb-addon /stremio-nzb-addon
 
-# Non-root user. Avoids files owned-by-root showing up in bind mounts on
-# the host. UID 1000 matches typical desktop accounts on Linux/macOS.
-ARG APP_UID=1000
-ARG APP_GID=1000
-RUN groupadd --system --gid ${APP_GID} addon \
-    && useradd  --system --gid ${APP_GID} --uid ${APP_UID} \
-       --home-dir /app --shell /usr/sbin/nologin addon \
-    && mkdir -p /app /app/cache \
-    && chown -R addon:addon /app
-
-WORKDIR /app
-COPY --from=builder --chown=addon:addon /build/target/release/stremio-nzb-addon /app/stremio-nzb-addon
-
-USER addon
-
-# Inside-container defaults. Override via compose env if you want.
-#   BIND_ADDR  — 0.0.0.0 because the container's loopback isn't reachable
-#                from the host. Compose maps the published port back to host.
-#   CACHE_DIR  — /app/cache; pair with a volume mount in compose.
-#   CONFIG_PATH — /app/config.toml; mount the host file in compose.
+# Inside-container defaults. Mount config.toml + cache from outside.
 ENV BIND_ADDR=0.0.0.0 \
     PORT=3000 \
-    CONFIG_PATH=/app/config.toml \
-    CACHE_DIR=/app/cache \
+    CONFIG_PATH=/config.toml \
+    CACHE_DIR=/cache \
     RUST_LOG=info
 
 EXPOSE 3000
 
-# `tini` reaps zombies + forwards signals so SIGTERM from `docker stop`
-# actually shuts the binary down cleanly.
-ENTRYPOINT ["/usr/bin/tini", "--", "/app/stremio-nzb-addon"]
+ENTRYPOINT ["/stremio-nzb-addon"]

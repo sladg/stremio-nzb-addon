@@ -1,6 +1,6 @@
 use chrono_lite::format_iso8601;
 
-use crate::config::AddonConfig;
+use crate::config::UserConfig;
 use crate::manifest::{catalog, manifest, ADDON_ID, ADDON_NAME};
 use crate::nzb_api::{Item, NzbWebApiPool};
 use crate::stream::item_to_stream;
@@ -37,7 +37,7 @@ pub fn handle_catalog(query: Option<&str>) -> CatalogResponse {
 }
 
 pub async fn handle_meta(
-    cfg: &AddonConfig,
+    user: &UserConfig,
     id: String,
     client: reqwest::Client,
     host: &str,
@@ -63,7 +63,7 @@ pub async fn handle_meta(
         .map(|c| c.into_owned())
         .unwrap_or_else(|_| raw_query.to_string());
 
-    let api = NzbWebApiPool::new(&cfg.indexers, client.clone());
+    let api = NzbWebApiPool::new(&user.indexers, client.clone());
     let items: Vec<Item> = api.search(&query).await;
 
     // Same Phase 5 grouping as the stream handler — re-uploads of the same

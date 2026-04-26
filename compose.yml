@@ -24,17 +24,15 @@ services:
       - "3000:3000"
 
     volumes:
-      # Live config — edit on the host, save via the configure UI, or
-      # write directly. Bind-mount so hot-edits stick across container
-      # rebuilds.
-      - ./config.toml:/app/config.toml
+      # Live config — edit on the host, restart container to apply.
+      - ./config.toml:/config.toml
       # Disk cache for streamed segments. Bind-mount so you can `du -sh`
       # from the host. Switch to a named volume in production deployments.
-      - ./cache:/app/cache
+      - ./cache:/cache
 
     environment:
       # The defaults in the Dockerfile already cover BIND_ADDR=0.0.0.0,
-      # PORT=3000, CONFIG_PATH=/app/config.toml, CACHE_DIR=/app/cache.
+      # PORT=3000, CONFIG_PATH=/config.toml, CACHE_DIR=/cache.
       # Override anything below as needed.
 
       # Tracing — drop to `warn` in production, `debug` for deep diagnostics.
@@ -51,9 +49,6 @@ services:
       # cap-eviction (= "playing right now"). Default 5 min.
       # PROTECT_WINDOW_SECS: "300"
 
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/manifest.json"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+    # No docker-level healthcheck: scratch image has no shell / no curl,
+    # so HEALTHCHECK can't run. K8s should use an HTTP probe against
+    # /health instead (handled at the kubelet, not inside the container).

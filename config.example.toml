@@ -1,0 +1,139 @@
+# Example configuration. Copy to `config.toml` and fill in real values.
+#
+# The real `config.toml` is .gitignore'd — never commit credentials.
+#
+# Schema overview:
+#   [defaults]                  → applied to all requests; merge base for users
+#   [[defaults.indexers]]       → operator's NZB indexers (Newznab API)
+#   [[defaults.nntpServers]]    → operator's NNTP servers (Usenet backbones)
+#   [users.<token>]             → per-friend access tokens + overrides
+#
+# Auth model:
+#   - Empty `[users]` table → no auth (LOCAL DEV ONLY).
+#   - Non-empty → addon routes mount under /{key}/..., bare paths 404.
+#   - Each user has TWO identifiers:
+#       * Map key (e.g. `[users.alice]`)  — friendly name shown in logs
+#       * `key = "..."` field             — URL secret friends install
+#     Decoupling them lets you rotate the secret without losing log
+#     attribution, or share the same friendly-name shape across deployments.
+#   - `/v/{stream-token}.mkv` and `/health` always live at root.
+#
+# Hard guard against accidental open deploys:
+#   requireAuth = true → boot fails if [users] is empty.
+#   Set this on any deployment that's reachable beyond 127.0.0.1.
+#
+# Abuse protection (env vars, all optional):
+#   RATE_LIMIT_PER_MINUTE   per-IP req/min (default 60, 0 disables)
+#   RATE_LIMIT_BURST        leaky-bucket burst size (default 30)
+#   BAN_FAILURE_THRESHOLD   bad-token rejects → ban (default 5, 0 disables)
+#   BAN_WINDOW_SECS         rolling window in seconds (default 300)
+#   BAN_DURATION_SECS       ban duration in seconds (default 3600)
+#   TRUST_PROXY_HEADERS     "1" = honor X-Forwarded-For / X-Real-IP
+#                           (only when behind a proxy that strips inbound copies)
+#
+# Public deployment checklist:
+#   - Bind addon to 127.0.0.1, put Caddy / Cloudflare Tunnel in front for TLS.
+#   - Path tokens leak in plaintext over HTTP and into reverse-proxy logs.
+#   - Generate tokens with at least 64 bits of entropy (e.g. `openssl rand -hex 16`).
+
+# ─── Top-level ───────────────────────────────────────────────────────────────
+
+# Refuse to start if [users] is empty. The hard guard against shipping
+# an unauthenticated addon to a public endpoint by mistake. Recommended
+# `true` for any non-127.0.0.1 deployment.
+requireAuth = true
+
+# ─── Defaults ────────────────────────────────────────────────────────────────
+
+[defaults]
+# Quality window in Gbit/h (1 GiB/h ≈ 8 Gbit/h). Either bound is optional.
+#   ~25  → SD ceiling
+#   ~50  → HD ceiling (1080p x265 fits)
+#   ~100 → 4K ceiling
+# Multi-language packs need headroom (extra audio tracks ≈ +20-30%).
+minGbitPerHour = 5.0
+maxGbitPerHour = 30.0
+
+# Drop releases whose title matches this regex. Bare pattern is
+# case-insensitive; wrap as /pattern/flags for explicit flags.
+excludeRegex = '\b(av1|hdr|dolby[\s.\-_]?vision|cam|hdcam|hdts|telesync|10[\s.\-_]?bit)\b'
+
+# Pre-flight checks (run before returning streams to Stremio):
+#   structure    — fetch each NZB, verify RAR layout. ~50ms/result.
+#   availability — BODY-probe canary articles on every NNTP server.
+#                  ~150ms/result. Strict AND across servers.
+validateNzbStructure = true
+validateNzbAvailability = true
+
+# How many distinct stream entries per (resolution, language) bucket.
+# 1 = strict, 2 = good balance, 3+ = chatty.
+streamsPerResolution = 2
+
+# Audio language preferences. Empty/omitted = no filter.
+#   "original"          — special token: looked up via Cinemeta per title
+#                         (Korean show → korean, German movie → german, etc.)
+#   "english","czech"   — full English names
+#   "en","cs"           — ISO 639-1 codes (auto-normalized)
+# Untagged releases pass through (most English releases skip the tag).
+# Multi-language tags (MULTi, DUAL, MULTI.SUB) also pass through.
+preferredLanguages = ["original", "english"]
+
+# ─── Operator's indexers ─────────────────────────────────────────────────────
+# At least one is required. Any Newznab-compatible indexer works.
+
+[[defaults.indexers]]
+url = "https://api.example-indexer.net"
+apiKey = "REPLACE_WITH_REAL_API_KEY"
+
+# [[defaults.indexers]]
+# url = "https://api.another-indexer.net"
+# apiKey = "REPLACE_WITH_REAL_API_KEY"
+
+# ─── Operator's NNTP servers ─────────────────────────────────────────────────
+# At least one is required. Multiple = per-segment failover.
+# Format: nntps://user:password@host:port/connections (the trailing
+# `/N` is the per-server connection-pool size).
+
+[[defaults.nntpServers]]
+server = "nntps://user:password@news.example.com:563/20"
+
+# [[defaults.nntpServers]]
+# server = "nntps://user:password@bonus.example.com:443/20"
+
+# ─── Per-user overrides ──────────────────────────────────────────────────────
+# Map key = friendly name (logs/audit). `key` field = URL secret.
+# Each user inherits everything from [defaults] unless they specify an
+# override below.
+#
+# Generate a key with: `openssl rand -hex 16`
+# (or any URL-safe random string of sufficient entropy)
+#
+# Override resolution:
+#   - Option fields       → user's `Some` wins, else inherit
+#   - Vec fields          → non-empty replaces; empty inherits
+#   - Per-user `indexers` works fully (per-request pool)
+#   - Per-user `nntpServers` is schema-valid but a runtime no-op for now;
+#     boot warns if any user has it set
+
+# Alice wants Czech audio when available, otherwise English.
+# Bumps the bandwidth cap to admit MULTi packs (multi-language uploads
+# are ~60-70 Gbit/h at 1080p).
+# She installs:  https://addon.example.com/3f7a9c8e2b1d4f6a8c5e7d9b1a3c5e7f/manifest.json
+[users.alice]
+key = "3f7a9c8e2b1d4f6a8c5e7d9b1a3c5e7f"
+preferredLanguages = ["original", "english", "czech"]
+maxGbitPerHour = 70.0
+
+# Bob only wants Spanish, fewer entries per resolution, and uses a
+# tighter exclude regex (drops everything HEVC-encoded — his device
+# doesn't decode it).
+[users.bob]
+key = "8d2e6f1a4c9b7e3d5f8a2c6e1b4d9f7a"
+preferredLanguages = ["spanish"]
+streamsPerResolution = 1
+excludeRegex = '\b(x265|h\.?265|hevc|av1)\b'
+
+# Inherits everything from defaults — useful for "give friend X access
+# without customizing anything for them yet."
+# [users.carol]
+# key = "..."

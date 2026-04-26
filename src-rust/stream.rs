@@ -1,5 +1,5 @@
 use crate::cinemeta::{expand_original, original_languages, wants_original};
-use crate::config::AddonConfig;
+use crate::config::{AddonConfig, UserConfig};
 use crate::content_filter::{filter_by_language, filter_by_title_regex};
 use crate::manifest::{ADDON_ID, ADDON_NAME};
 use crate::nzb_api::{item_size, Item, NzbWebApiPool};
@@ -268,14 +268,18 @@ pub fn item_to_stream(
 }
 
 pub async fn build_streams(
-    cfg: &AddonConfig,
+    _cfg: &AddonConfig,
+    user: &UserConfig,
     type_: String,
     id: String,
     client: reqwest::Client,
     host: &str,
     sessions: &SessionRegistry,
 ) -> Vec<Stream> {
-    let api = NzbWebApiPool::new(&cfg.indexers, client.clone());
+    // `_cfg` is unused right now — kept in the signature so future
+    // operator-level concerns (e.g. shared rate-limit state) have a place
+    // to plug in without another signature change.
+    let api = NzbWebApiPool::new(&user.indexers, client.clone());
 
     let mut items: Vec<Item> = match type_.as_str() {
         "movie" => {
@@ -301,13 +305,13 @@ pub async fn build_streams(
         }
     };
 
-    if (cfg.min_gbit_per_hour.is_some() || cfg.max_gbit_per_hour.is_some())
+    if (user.min_gbit_per_hour.is_some() || user.max_gbit_per_hour.is_some())
         && (type_ == "movie" || type_ == "series")
     {
-        items = filter_by_quality(items, cfg.min_gbit_per_hour, cfg.max_gbit_per_hour, &type_);
+        items = filter_by_quality(items, user.min_gbit_per_hour, user.max_gbit_per_hour, &type_);
     }
 
-    items = filter_by_title_regex(items, cfg.exclude_regex.as_deref());
+    items = filter_by_title_regex(items, user.exclude_regex.as_deref());
 
     // Resolve the show/movie's original language(s) via Cinemeta (cached).
     // Used for two things:
@@ -326,27 +330,27 @@ pub async fn build_streams(
         original_languages(&client, &type_, &imdb_id).await
     };
 
-    let effective_languages: Vec<String> = if wants_original(&cfg.preferred_languages) {
-        expand_original(&cfg.preferred_languages, &originals)
+    let effective_languages: Vec<String> = if wants_original(&user.preferred_languages) {
+        expand_original(&user.preferred_languages, &originals)
     } else {
-        cfg.preferred_languages.clone()
+        user.preferred_languages.clone()
     };
 
     items = filter_by_language(items, &effective_languages);
 
-    if cfg.validate_nzb_structure.unwrap_or(false) && !items.is_empty() {
+    if user.validate_nzb_structure.unwrap_or(false) && !items.is_empty() {
         items = filter_by_nzb_sanity(&client, items).await;
     }
 
-    let servers: Vec<String> = cfg.nntp_servers.iter().map(|s| s.server.clone()).collect();
+    let servers: Vec<String> = user.nntp_servers.iter().map(|s| s.server.clone()).collect();
 
-    if cfg.validate_nzb_availability.unwrap_or(false) && !items.is_empty() && !servers.is_empty() {
+    if user.validate_nzb_availability.unwrap_or(false) && !items.is_empty() && !servers.is_empty() {
         items = filter_by_nzb_availability(&client, items, &servers).await;
     }
 
     sort_by_resolution(&mut items);
 
-    let per_res = cfg.streams_per_resolution.unwrap_or(1);
+    let per_res = user.streams_per_resolution.unwrap_or(1);
 
     // Phase 5: collapse re-uploads of the same release (= same GroupSignature)
     // into a single Stremio entry whose pre-flight walks the upload list.
@@ -453,13 +457,23 @@ mod tests {
         // Invalid indexer → no items returned → no sessions registered.
         // Just verifies the wiring compiles and runs without panic.
         let cfg = AddonConfig {
-            indexers: vec![Indexer { url: "http://x.invalid".into(), api_key: "k".into() }],
-            nntp_servers: vec![NntpServer { server: "nntps://u:p@y.invalid/1".into() }],
+            defaults: UserConfig {
+                indexers: vec![Indexer {
+                    url: "http://x.invalid".into(),
+                    api_key: "k".into(),
+                }],
+                nntp_servers: vec![NntpServer {
+                    server: "nntps://u:p@y.invalid/1".into(),
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         };
+        let user = cfg.defaults.clone();
         let registry = new_registry();
         let _streams = build_streams(
             &cfg,
+            &user,
             "movie".to_string(),
             "tt0133093".to_string(),
             reqwest::Client::new(),

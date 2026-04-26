@@ -1,9 +1,11 @@
+mod auth;
 mod cache;
 mod catalog;
 mod cinemeta;
 mod config;
 mod content_filter;
 mod healthcheck;
+mod ip_ban;
 mod manifest;
 mod nzb_api;
 mod nzb_availability;
@@ -14,42 +16,50 @@ mod stream;
 mod streaming;
 mod stremio;
 mod tvdb;
-mod ui;
 mod util;
 
-use std::net::IpAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{Html, IntoResponse, Json, Redirect},
-    routing::{get, post},
+    response::IntoResponse,
+    routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+use crate::auth::UserName;
 use crate::config::AddonConfig;
-use crate::healthcheck::{indexer_handler, nntp_handler};
+use crate::ip_ban::{BanConfig, BanList};
 use crate::streaming::{disk_cache::DiskCache, nntp::NntpPool, session::SessionRegistry};
 use crate::stremio::Manifest;
 
 pub struct AppState {
     pub http: reqwest::Client,
     pub cfg: Arc<RwLock<AddonConfig>>,
-    pub config_path: PathBuf,
     // Streaming layer.
     pub sessions: SessionRegistry,
     pub cache: Arc<DiskCache>,
-    /// Long-lived NNTP connection pool. Rebuilt when `/api/config` saves.
-    /// `None` until at least one server is configured.
+    /// Long-lived NNTP connection pool. Built once at boot from operator
+    /// config; per-user NNTP servers is a future enhancement.
     pub nntp: RwLock<Option<Arc<NntpPool>>>,
-    /// Wall clock at boot. Drives the `/api/status` uptime field.
+    /// Boot-time timestamp for the `/health` uptime field.
     pub started_at: std::time::Instant,
+    /// IP-level abuse tracker. Records failed-auth events; the outer
+    /// middleware short-circuits banned IPs with 403.
+    pub ban_list: Arc<BanList>,
+    /// True when the operator opted into trusting `X-Forwarded-For` /
+    /// `X-Real-IP` headers (`TRUST_PROXY_HEADERS=1`). Off by default;
+    /// only enable when behind a known reverse proxy that strips these
+    /// headers from inbound requests, otherwise IPs are spoofable.
+    pub trust_proxy_headers: bool,
 }
 
 #[tokio::main]
@@ -61,8 +71,8 @@ async fn main() {
 
     // rustls 0.23 needs an explicit CryptoProvider when both `aws-lc-rs` and
     // `ring` show up via separate dependency paths (reqwest pulls one in
-    // transitively, our healthcheck/streaming code pulls another). Install
-    // the aws-lc-rs default once at boot before any TLS handshake runs.
+    // transitively). Install the aws-lc-rs default once at boot before any
+    // TLS handshake runs.
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .ok();
@@ -88,10 +98,8 @@ async fn main() {
         }
         Ok(None) => {
             tracing::warn!(
-                "no config at {}; visit http://{}:{}/configure to set up",
+                "no config at {}; addon will start but stream requests will fail until you create one",
                 config_path.display(),
-                bind_addr,
-                port
             );
             AddonConfig::empty()
         }
@@ -100,6 +108,25 @@ async fn main() {
             AddonConfig::empty()
         }
     };
+
+    // Validate after load. If the user opted into `requireAuth = true`
+    // but didn't configure any users, we refuse to start — that's
+    // precisely the foot-gun the flag exists to prevent.
+    if let Err(msg) = initial_cfg.validate() {
+        tracing::error!("config invalid: {msg}");
+        std::process::exit(1);
+    }
+
+    if initial_cfg.requires_auth() {
+        tracing::info!(
+            "[auth] {} access key(s) configured; addon routes mounted under /{{key}}/...",
+            initial_cfg.users.len()
+        );
+    } else {
+        tracing::warn!(
+            "[auth] no access keys configured; addon is unauthenticated — fine for local dev, NOT for public deployment. Set `requireAuth = true` in config.toml to make this a startup-time error."
+        );
+    }
 
     let http = reqwest::Client::builder()
         .user_agent("stremio-nzb-addon/0.1 (rust)")
@@ -130,14 +157,36 @@ async fn main() {
     // Build the NNTP pool from the loaded config (if any servers).
     let initial_nntp = build_nntp_pool(&initial_cfg);
 
+    let ban_config = BanConfig::from_env();
+    if ban_config.enabled() {
+        tracing::info!(
+            "[ban] enabled: {} failures within {}s → ban for {}s",
+            ban_config.failure_threshold,
+            ban_config.window.as_secs(),
+            ban_config.ban_duration.as_secs(),
+        );
+    } else {
+        tracing::info!("[ban] disabled (set BAN_FAILURE_THRESHOLD>0 to enable)");
+    }
+    let trust_proxy_headers = std::env::var("TRUST_PROXY_HEADERS")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if trust_proxy_headers {
+        tracing::info!(
+            "[ban] trusting X-Forwarded-For / X-Real-IP headers (TRUST_PROXY_HEADERS=1) — ensure the addon sits behind a reverse proxy that strips inbound copies"
+        );
+    }
+
     let state = Arc::new(AppState {
         http,
         cfg: Arc::new(RwLock::new(initial_cfg)),
-        config_path,
         sessions: streaming::session::new_registry(),
         cache,
         nntp: RwLock::new(initial_nntp),
         started_at: std::time::Instant::now(),
+        ban_list: BanList::new(ban_config),
+        trust_proxy_headers,
     });
 
     // GC: prunes idle sessions + enforces cache disk-byte cap.
@@ -176,32 +225,172 @@ async fn main() {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
-        .route("/", get(|| async { Redirect::to("/configure") }))
-        .route("/manifest.json", get(manifest_route))
-        .route("/configure", get(configure_route))
-        .route("/stream/{type}/{id}", get(stream_route))
-        .route("/catalog/{type}/{id}", get(catalog_route_no_extra))
-        .route("/catalog/{type}/{id}/{extra}", get(catalog_route_extra))
-        .route("/meta/{type}/{id}", get(meta_route))
-        .route("/v/{token}", get(video_route))
-        .route("/api/config", post(api_save_config))
-        .route("/api/status", get(api_status))
-        .route("/api/healthcheck/indexer", post(indexer_handler))
-        .route("/api/healthcheck/nntp", post(nntp_handler))
-        .with_state(state)
-        .layer(cors);
+    let app = build_router(state.clone()).layer(cors);
 
     let listener = tokio::net::TcpListener::bind((bind_addr, port))
         .await
         .expect("bind");
     tracing::info!("Addon listening at http://{bind_addr}:{port}");
-    axum::serve(listener, app).await.expect("serve");
+    // `into_make_service_with_connect_info` exposes the peer address to
+    // handlers via `ConnectInfo<SocketAddr>` — needed for the ban-check
+    // and rate-limit middlewares to identify the client.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("serve");
+}
+
+/// Best-effort client IP. Honors `X-Forwarded-For` / `X-Real-IP` only
+/// when `TRUST_PROXY_HEADERS=1` and the addon is documented to sit
+/// behind a real proxy that strips inbound copies of those headers
+/// (otherwise they're trivially spoofed from the public internet).
+///
+/// Falls back to the peer address from `ConnectInfo` (the actual TCP
+/// remote — for direct connections that's the client; behind a proxy
+/// without `TRUST_PROXY_HEADERS=1` it's the proxy and every request
+/// looks like the same IP, which collapses bans to "the proxy ip,"
+/// which is still wrong but fail-safe).
+pub fn client_ip(
+    headers: &axum::http::HeaderMap,
+    connect_info: Option<&SocketAddr>,
+    trust_proxy: bool,
+) -> Option<IpAddr> {
+    if trust_proxy {
+        // `X-Forwarded-For` is a comma-separated list; the first entry is
+        // the original client (assuming the proxy appends, not prepends).
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = xff.split(',').next() {
+                if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+        if let Some(xri) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            if let Ok(ip) = xri.trim().parse::<IpAddr>() {
+                return Some(ip);
+            }
+        }
+    }
+    connect_info.map(|s| s.ip())
+}
+
+/// Outermost middleware: 403 banned IPs immediately, before any work
+/// runs. Every request goes through this — including `/health` —
+/// because if an IP is banned we don't want it pinging anything. The
+/// liveness probe traffic is from inside the cluster (`127.0.0.1` or
+/// the kubelet's IP) which won't get banned in practice.
+async fn ban_check_middleware(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let ip = client_ip(request.headers(), Some(&addr), state.trust_proxy_headers)
+        .unwrap_or(addr.ip());
+    if state.ban_list.is_banned(ip) {
+        tracing::warn!("[ban] reject banned ip={ip} path={}", request.uri().path());
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
+}
+
+/// Compose the router. Addon routes either:
+///   - mount at root (when `cfg.users` is empty — local dev), so
+///     `GET /manifest.json` works directly, OR
+///   - nest under `/{user_token}` with the auth middleware, so
+///     `GET /{token}/manifest.json` works and bare `/manifest.json` 404s.
+///
+/// `/v/{token}.mkv` and `/health` are always at root — the former because
+/// its token is independent, the latter because k8s probes don't auth.
+fn build_router(state: Arc<AppState>) -> Router {
+    use std::time::Duration;
+    use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+
+    let addon_routes: Router<Arc<AppState>> = Router::new()
+        .route("/manifest.json", get(manifest_route))
+        .route("/stream/{type}/{id}", get(stream_route))
+        .route("/catalog/{type}/{id}", get(catalog_route_no_extra))
+        .route("/catalog/{type}/{id}/{extra}", get(catalog_route_extra))
+        .route("/meta/{type}/{id}", get(meta_route));
+
+    let always_routes: Router<Arc<AppState>> = Router::new()
+        .route("/v/{token}", get(video_route))
+        .route("/health", get(healthcheck::health));
+
+    // Per-IP rate limit on addon routes. Skip /v/... (range requests during
+    // playback) and /health (k8s probes). Disabled when
+    // RATE_LIMIT_PER_MINUTE=0.
+    let rate_per_minute: u64 = std::env::var("RATE_LIMIT_PER_MINUTE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let burst: u32 = std::env::var("RATE_LIMIT_BURST")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    let addon_routes = if rate_per_minute > 0 {
+        // Convert per-minute → per-request period in milliseconds.
+        let period_ms = (60_000_u64 / rate_per_minute).max(1);
+        let governor_config = Arc::new(
+            GovernorConfigBuilder::default()
+                .period(Duration::from_millis(period_ms))
+                .burst_size(burst)
+                .finish()
+                .expect("governor config"),
+        );
+        // Light cleanup of stale per-IP buckets so the governor's
+        // internal map doesn't grow without bound.
+        let limiter = governor_config.limiter().clone();
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(60);
+            loop {
+                tokio::time::sleep(interval).await;
+                limiter.retain_recent();
+            }
+        });
+        tracing::info!(
+            "[rate-limit] enabled: ~{rate_per_minute} req/min per IP, burst {burst}"
+        );
+        addon_routes.layer(GovernorLayer::new(governor_config))
+    } else {
+        tracing::info!("[rate-limit] disabled (set RATE_LIMIT_PER_MINUTE>0 to enable)");
+        addon_routes
+    };
+
+    let requires_auth = state
+        .cfg
+        .try_read()
+        .map(|g| g.requires_auth())
+        .unwrap_or(false);
+
+    let app = if requires_auth {
+        let gated = addon_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_access_token,
+        ));
+        Router::new()
+            .nest("/{user_token}", gated)
+            .merge(always_routes)
+    } else {
+        addon_routes.merge(always_routes)
+    };
+
+    // Ban-check runs OUTSIDE all other middleware so a banned IP is
+    // rejected before we spend a single CPU cycle on auth, routing,
+    // or rate limiting.
+    app.with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            ban_check_middleware,
+        ))
 }
 
 async fn manifest_route() -> impl IntoResponse {
     let m: Manifest = manifest::manifest();
-    let mut resp = Json(m).into_response();
+    let mut resp = axum::Json(m).into_response();
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=3600"),
@@ -209,32 +398,34 @@ async fn manifest_route() -> impl IntoResponse {
     resp
 }
 
-async fn configure_route(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
-    let cfg = state.cfg.read().await;
-    Html(ui::render_configure(&cfg, host).into_string())
+/// Pull the named param from the path map. Used by addon-route handlers
+/// to stay agnostic of whether they're mounted at root (params: type, id)
+/// or under `/{user_token}` (params: user_token, type, id) — the typed
+/// `Path<(...)>` tuple extractor errors on arity mismatch, but a
+/// HashMap deserializes either layout.
+fn path_param<'a>(params: &'a HashMap<String, String>, key: &str) -> &'a str {
+    params.get(key).map(String::as_str).unwrap_or("")
 }
 
 async fn stream_route(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path((type_, id)): Path<(String, String)>,
-) -> Json<crate::stremio::StreamsResponse> {
+    user: Option<Extension<UserName>>,
+    Path(params): Path<HashMap<String, String>>,
+) -> axum::Json<crate::stremio::StreamsResponse> {
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost")
         .to_string();
-    let id = strip_json_suffix(&id).to_string();
+    let type_ = path_param(&params, "type").to_string();
+    let id = strip_json_suffix(path_param(&params, "id")).to_string();
     let cfg = state.cfg.read().await;
+    let user_name = user.as_ref().map(|u| u.0 .0.as_str());
+    let user_cfg = cfg.resolve(user_name);
     let streams = stream::build_streams(
         &cfg,
+        &user_cfg,
         type_,
         id,
         state.http.clone(),
@@ -242,7 +433,7 @@ async fn stream_route(
         &state.sessions,
     )
     .await;
-    Json(crate::stremio::StreamsResponse {
+    axum::Json(crate::stremio::StreamsResponse {
         streams,
         cache_max_age: 3600,
     })
@@ -254,16 +445,17 @@ struct CatalogQuery {
 }
 
 async fn catalog_route_no_extra(
-    Path((_type, _id)): Path<(String, String)>,
+    Path(_params): Path<HashMap<String, String>>,
     Query(q): Query<CatalogQuery>,
-) -> Json<crate::stremio::CatalogResponse> {
-    Json(catalog::handle_catalog(q.search.as_deref()))
+) -> axum::Json<crate::stremio::CatalogResponse> {
+    axum::Json(catalog::handle_catalog(q.search.as_deref()))
 }
 
 async fn catalog_route_extra(
-    Path((_type, _id, extra)): Path<(String, String, String)>,
+    Path(params): Path<HashMap<String, String>>,
     Query(q): Query<CatalogQuery>,
-) -> Json<crate::stremio::CatalogResponse> {
+) -> axum::Json<crate::stremio::CatalogResponse> {
+    let extra = path_param(&params, "extra").to_string();
     let search = q.search.or_else(|| {
         let extra = strip_json_suffix(&extra);
         extra
@@ -275,96 +467,25 @@ async fn catalog_route_extra(
                     .unwrap_or_else(|_| s.to_string())
             })
     });
-    Json(catalog::handle_catalog(search.as_deref()))
+    axum::Json(catalog::handle_catalog(search.as_deref()))
 }
 
 async fn meta_route(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path((_type, id)): Path<(String, String)>,
-) -> Json<crate::stremio::MetaResponse> {
+    user: Option<Extension<UserName>>,
+    Path(params): Path<HashMap<String, String>>,
+) -> axum::Json<crate::stremio::MetaResponse> {
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost")
         .to_string();
-    let id = strip_json_suffix(&id).to_string();
+    let id = strip_json_suffix(path_param(&params, "id")).to_string();
     let cfg = state.cfg.read().await;
-    Json(
-        catalog::handle_meta(&cfg, id, state.http.clone(), &host, &state.sessions).await,
-    )
-}
-
-#[derive(Serialize)]
-struct ApiConfigResponse {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-async fn api_save_config(
-    State(state): State<Arc<AppState>>,
-    body: Result<Json<AddonConfig>, axum::extract::rejection::JsonRejection>,
-) -> (StatusCode, Json<ApiConfigResponse>) {
-    let mut new = match body {
-        Ok(Json(cfg)) => cfg,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiConfigResponse {
-                    ok: false,
-                    error: Some(err.body_text()),
-                }),
-            );
-        }
-    };
-
-    new.normalize();
-
-    if let Err(msg) = new.validate() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiConfigResponse {
-                ok: false,
-                error: Some(msg),
-            }),
-        );
-    }
-
-    if let Err(err) = config::save_to_disk(&state.config_path, &new).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiConfigResponse {
-                ok: false,
-                error: Some(format!("{err:#}")),
-            }),
-        );
-    }
-
-    // Rebuild the NNTP pool from the new server list. The replaced pool's
-    // idle connections are closed eagerly; in-flight requests on the old
-    // pool finish naturally because they hold an `Arc<NntpPool>` snapshot
-    // taken before the swap.
-    let new_pool = build_nntp_pool(&new);
-    {
-        let mut guard = state.nntp.write().await;
-        let old = guard.take();
-        *guard = new_pool;
-        if let Some(old_pool) = old {
-            old_pool.shutdown().await;
-        }
-    }
-
-    *state.cfg.write().await = new;
-    tracing::info!("config saved to {}", state.config_path.display());
-
-    (
-        StatusCode::OK,
-        Json(ApiConfigResponse {
-            ok: true,
-            error: None,
-        }),
-    )
+    let user_name = user.as_ref().map(|u| u.0 .0.as_str());
+    let user_cfg = cfg.resolve(user_name);
+    axum::Json(catalog::handle_meta(&user_cfg, id, state.http.clone(), &host, &state.sessions).await)
 }
 
 fn strip_json_suffix(s: &str) -> &str {
@@ -372,14 +493,24 @@ fn strip_json_suffix(s: &str) -> &str {
 }
 
 /// Build a fresh `NntpPool` from the current config's `nntp_servers`.
-/// `None` if no servers are configured (e.g. fresh install before any
-/// /api/config save). Pool construction never opens connections — they
-/// open lazily on first acquire.
+/// `None` if no servers are configured. Pool construction never opens
+/// connections — they open lazily on first acquire.
 fn build_nntp_pool(cfg: &AddonConfig) -> Option<Arc<NntpPool>> {
-    if cfg.nntp_servers.is_empty() {
+    // Pool is built from operator-level defaults. Per-user `nntp_servers`
+    // overrides exist in the schema but are a no-op at runtime — log a
+    // visible warning if any user attempts an override so misuse is
+    // obvious. Per-user pools is a future enhancement.
+    for (token, user) in &cfg.users {
+        if !user.nntp_servers.is_empty() {
+            tracing::warn!(
+                "[nntp pool] user '{token}' has nntp_servers override, but per-user pools aren't wired yet — using defaults",
+            );
+        }
+    }
+    if cfg.defaults.nntp_servers.is_empty() {
         return None;
     }
-    let urls: Vec<String> = cfg.nntp_servers.iter().map(|s| s.server.clone()).collect();
+    let urls: Vec<String> = cfg.defaults.nntp_servers.iter().map(|s| s.server.clone()).collect();
     match NntpPool::from_urls(urls) {
         Ok(pool) => {
             tracing::info!(
@@ -393,26 +524,6 @@ fn build_nntp_pool(cfg: &AddonConfig) -> Option<Arc<NntpPool>> {
             None
         }
     }
-}
-
-#[derive(Serialize)]
-struct ApiStatusResponse {
-    sessions: usize,
-    cache_bytes: u64,
-    cache_max_bytes: u64,
-    cache_dir: String,
-    uptime_secs: u64,
-}
-
-async fn api_status(State(state): State<Arc<AppState>>) -> Json<ApiStatusResponse> {
-    let cache_bytes = streaming::gc::total_disk_bytes(&state.cache.root).await;
-    Json(ApiStatusResponse {
-        sessions: state.sessions.len(),
-        cache_bytes,
-        cache_max_bytes: state.cache.max_bytes,
-        cache_dir: state.cache.root.display().to_string(),
-        uptime_secs: state.started_at.elapsed().as_secs(),
-    })
 }
 
 /// Serve `[token].mkv` (or `.mp4`) — the streaming endpoint.
@@ -430,7 +541,6 @@ async fn video_route(
     Path(token_with_ext): Path<String>,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
     use axum::body::Body;
-    use axum::response::IntoResponse;
     use streaming::http_range::{
         content_range_header, content_range_unsatisfied, parse_range, ParsedRange, RangeError,
     };
@@ -451,9 +561,6 @@ async fn video_route(
     // safe even when total usage exceeds the cap.)
     session.touch();
 
-    // Pre-flight (lazy, OnceCell-guarded). Snapshot the NNTP pool now —
-    // a config save mid-stream replaces `state.nntp` but the existing
-    // session continues on the old pool until it drains naturally.
     let nntp = match state.nntp.read().await.clone() {
         Some(p) => p,
         None => {
@@ -518,9 +625,7 @@ async fn video_route(
 
     let total = active.total_size;
 
-    let range_header = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok());
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     let parsed = match parse_range(range_header, total) {
         Ok(p) => p,
         Err(RangeError::NotSatisfiable) => {
@@ -552,13 +657,8 @@ async fn video_route(
     // No deep clone — `active` is `&Arc<ActiveStream>`, the .clone() bumps
     // the refcount only.
     let cache_file = active.cache_file.clone();
-    let body_stream = streaming::pipeline::serve_range_stream(
-        active.clone(),
-        cache_file,
-        nntp,
-        start,
-        end,
-    );
+    let body_stream =
+        streaming::pipeline::serve_range_stream(active.clone(), cache_file, nntp, start, end);
     // Adapt anyhow::Error to std::io::Error for axum's Body::from_stream.
     let mapped = futures::StreamExt::map(body_stream, |r| {
         r.map_err(|e| std::io::Error::other(e.to_string()))
