@@ -1,11 +1,6 @@
-.docker/
-data/
-scripts/
-*.code-workspace
-example/
-.opencode
-.hive
+# Rust build output
 target/
-.reference/
+
+# Local state (real config has secrets; cache files are per-deployment)
 config.toml
 cache/

@@ -1,27 +1,14 @@
-# Build context excludes — keep the docker context tiny + reproducible.
-
-# Rust target dir (re-built inside the image)
+# Rust target dir (rebuilt inside the image)
 target/
 
 # Local state — neither belongs in the image
 config.toml
 cache/
 
-# Reference clones, scratch files
-.reference/
-.docker/
-data/
-
 # Git + editor + macOS noise
 .git/
 .gitignore
 .gitattributes
-.github/
-.idea/
-.vscode/
-.opencode
-.hive
-*.code-workspace
 .DS_Store
 **/.DS_Store
 
@@ -30,12 +17,5 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 
-# Repo docs, plans, scratch
-README.md
-LICENSE
-TECH_DEBT.md
-improvements.md
-example/
-scripts/
-changelogs/
-release.sh
+# Repo docs, plans (binary doesn't need them)
+*.md
