@@ -5,10 +5,22 @@ interface AddonConfig {
 export interface NzbHydraAddonConfig extends AddonConfig {
   indexerUrl: string;
   indexerApiKey: string;
+  minGbitPerHour?: number;
+  maxGbitPerHour?: number;
+  excludeRegex?: string;
+  validateNzbStructure?: boolean;
+  validateNzbAvailability?: boolean;
+  streamsPerResolution?: number;
 }
 
 export interface NzbAddonConfig extends AddonConfig {
   indexers: Array<{ url: string; apiKey: string }>;
+  minGbitPerHour?: number;
+  maxGbitPerHour?: number;
+  excludeRegex?: string;
+  validateNzbStructure?: boolean;
+  validateNzbAvailability?: boolean;
+  streamsPerResolution?: number;
 }
 
 export interface RSS extends Channel {
@@ -74,7 +86,7 @@ export interface Config {
 
 export interface ConfigField {
   key: string;
-  type: "text" | "password" | "array";
+  type: "text" | "password" | "array" | "number";
   default?: string;
   title?: string;
   options?: string[];

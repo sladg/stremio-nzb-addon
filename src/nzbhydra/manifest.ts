@@ -59,5 +59,13 @@ export const config: Config = {
         },
       ],
     },
+    {
+      key: "maxGbitPerHour",
+      type: "number",
+      title: "Max Bandwidth (Gbit/hour)",
+      placeholder:
+        "Optional: 25 (SD), 50 (HD), 100 (4K) - filters high-bandwidth streams",
+      required: false,
+    },
   ],
 };

@@ -5,3 +5,9 @@ data/
 scripts/
 *.code-workspace
 example/
+.opencode
+.hive
+target/
+.reference/
+config.toml
+cache/

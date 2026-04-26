@@ -1,0 +1,59 @@
+# Compose v2 file (run `docker compose up`, not the legacy `docker-compose`).
+#
+# Note: this is the Rust-addon stack. The legacy `docker-compose.yml` in
+# this repo targets the TypeScript implementation (nzbhydra2 + valkey) and
+# is left untouched; pick whichever you want to run.
+#
+# Quick start:
+#   1. Edit ./config.toml (indexers + nntpServers — see config.toml.example
+#      or POST to /api/config from the configure UI after first boot).
+#   2. `docker compose up -d --build`
+#   3. Watch logs: `docker compose logs -f addon`
+#   4. Add `http://localhost:3000/manifest.json` in Stremio.
+
+services:
+  addon:
+    image: stremio-nzb-addon:rust
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stremio-nzb-addon
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      # Live config — edit on the host, save via the configure UI, or
+      # write directly. Bind-mount so hot-edits stick across container
+      # rebuilds.
+      - ./config.toml:/app/config.toml
+      # Disk cache for streamed segments. Bind-mount so you can `du -sh`
+      # from the host. Switch to a named volume in production deployments.
+      - ./cache:/app/cache
+
+    environment:
+      # The defaults in the Dockerfile already cover BIND_ADDR=0.0.0.0,
+      # PORT=3000, CONFIG_PATH=/app/config.toml, CACHE_DIR=/app/cache.
+      # Override anything below as needed.
+
+      # Tracing — drop to `warn` in production, `debug` for deep diagnostics.
+      RUST_LOG: "info,stremio_nzb_addon::streaming=info"
+
+      # Cache cap (default 1 GiB). Bump this for full-movie playback
+      # without mid-stream eviction. Example: 10 GiB.
+      # CACHE_BYTES: "10737418240"
+
+      # Idle session GC threshold. Default 1 h is fine for typical use.
+      # IDLE_TIMEOUT_SECS: "3600"
+
+      # Sessions accessed within this window are protected from
+      # cap-eviction (= "playing right now"). Default 5 min.
+      # PROTECT_WINDOW_SECS: "300"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/manifest.json"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

@@ -1,0 +1,54 @@
+# Build context excludes — keep the docker context tiny + reproducible.
+
+# Rust target dir (re-built inside the image)
+target/
+
+# Existing TS implementation (not referenced by the Rust build at all)
+src/
+public/
+configure/
+dist/
+node_modules/
+package.json
+package-lock.json
+pnpm-lock.yaml
+tsconfig.json
+beamup.json
+
+# Local state — neither belongs in the image
+config.toml
+cache/
+
+# Reference clones, scratch files
+.reference/
+.docker/
+data/
+
+# Git + editor + macOS noise
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+.opencode
+.hive
+*.code-workspace
+.DS_Store
+**/.DS_Store
+
+# Compose / Docker artifacts (don't bake yourself into your own context)
+docker-compose.yml
+compose.yml
+Dockerfile
+.dockerignore
+
+# Repo docs, plans, scratch
+README.md
+LICENSE
+TECH_DEBT.md
+improvements.md
+example/
+scripts/
+changelogs/
+release.sh
