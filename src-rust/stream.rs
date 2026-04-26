@@ -1,7 +1,7 @@
 use crate::cinemeta::{expand_original, original_languages, wants_original};
 use crate::config::{AddonConfig, UserConfig};
 use crate::content_filter::{filter_by_language, filter_by_title_regex};
-use crate::manifest::{ADDON_ID, ADDON_NAME};
+use crate::manifest::{host_label, ADDON_ID, ADDON_NAME};
 use crate::nzb_api::{item_size, Item, NzbWebApiPool};
 use crate::nzb_availability::filter_by_nzb_availability;
 use crate::nzb_sanity::filter_by_nzb_sanity;
@@ -399,6 +399,10 @@ pub async fn build_streams(
     let groups = group_candidates(candidates);
     let limited = limit_groups_per_resolution(groups, per_res);
 
+    // Host-flavored display name so the user can tell which install
+    // produced the entry when multiple are configured (e.g. LAN IP vs
+    // public hostname). Computed once outside the per-group loop.
+    let display_name = format!("{ADDON_NAME} ({})", host_label(base_url));
     let streams: Vec<Stream> = limited
         .into_iter()
         .map(|group| {
@@ -408,7 +412,7 @@ pub async fn build_streams(
             let display_item = group[0].item.clone();
             let token = register_group(sessions, group);
             let url = format!("{base_url}/v/{token}.mkv");
-            item_to_stream(&display_item, ADDON_NAME, ADDON_ID, url, &originals)
+            item_to_stream(&display_item, &display_name, ADDON_ID, url, &originals)
         })
         .collect();
 

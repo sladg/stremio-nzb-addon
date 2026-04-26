@@ -134,6 +134,59 @@ pub fn build_segment_refs(file: &NzbFile, server_index: usize) -> Vec<SegmentRef
     out
 }
 
+/// Rewrite a Flat-mode segment list so per-segment offsets and sizes use
+/// the *actual decoded* payload size as the stride, not the indexer's
+/// `<segment bytes="…">` value.
+///
+/// Background: NZB indexers disagree on whether `<segment bytes>` means the
+/// yEnc-encoded article body length (~3% larger) or the decoded payload.
+/// When it means the encoded length, the original `build_segment_refs`
+/// over-spaces offsets and the streaming layer ends up writing real data
+/// followed by sparse-file zeros at the tail of every segment — that's
+/// what corrupts the assembled stream and shows up as 1–2 sec stutter.
+///
+/// Inputs:
+///   - `actual_stride`: decoded byte length of segment 0, observed at
+///     preflight. Assumed uniform across all segments except possibly
+///     the last (which is typically smaller).
+///   - `total_file_size`: from `=ybegin size=…` in the yEnc header. When
+///     present, gives the exact tail size; when `None`, the last segment
+///     is assumed to be a full stride too (slight overestimate, acceptable
+///     fallback for the rare poster who omits the header).
+///
+/// No-op when `segments[0].bytes == actual_stride` — the indexer is
+/// already reporting decoded sizes correctly and the existing layout is
+/// authoritative.
+pub fn rebuild_for_decoded_stride(
+    segments: &mut [SegmentRef],
+    actual_stride: u64,
+    total_file_size: Option<u64>,
+) -> u64 {
+    if segments.is_empty() {
+        return 0;
+    }
+    if segments[0].bytes == actual_stride {
+        // Indexer already reports decoded sizes — keep existing layout.
+        return segments.iter().map(|s| s.bytes).sum();
+    }
+    let n = segments.len() as u64;
+    let computed_total = match total_file_size {
+        Some(t) if t > 0 && t >= (n - 1) * actual_stride => t,
+        _ => n * actual_stride, // fallback: assume uniform; cache may overestimate by <1 stride
+    };
+    for (i, seg) in segments.iter_mut().enumerate() {
+        let i = i as u64;
+        seg.offset_in_stream = i * actual_stride;
+        seg.bytes = if i < n - 1 {
+            actual_stride
+        } else {
+            // Last segment carries the file tail (≤ stride).
+            computed_total.saturating_sub(i * actual_stride).min(actual_stride)
+        };
+    }
+    computed_total
+}
+
 /// Probe a single NZB URL for Flat-mode playability. Returns a fully-built
 /// `ActiveStream` ready for Phase 3+ to serve bytes from.
 pub async fn probe_candidate(
@@ -179,12 +232,10 @@ async fn probe_candidate_inner(
         DetectedLayout::Flat(f) => f,
     };
 
-    let segments = build_segment_refs(main, 0);
+    let mut segments = build_segment_refs(main, 0);
     if segments.is_empty() {
         return Err(PreflightError::NoPlayableFile);
     }
-
-    let total_size: u64 = segments.iter().map(|s| s.bytes).sum();
 
     // Smoke the first segment via the pooled connection — same TCP+TLS+AUTH
     // gets reused for the actual segment fetches once playback starts.
@@ -198,6 +249,25 @@ async fn probe_candidate_inner(
     let decoded = decode_yenc(&raw).map_err(|e| PreflightError::Decode(format!("{e:?}")))?;
     if decoded.data.is_empty() {
         return Err(PreflightError::EmptyPayload);
+    }
+
+    // Reconcile NZB-declared sizes against the actual decoded payload.
+    // Some indexers report yEnc-encoded body lengths in `<segment bytes>`,
+    // others report decoded payload lengths. When they mismatch, the
+    // original cumulative-offset layout is wrong, and the streaming layer
+    // ends up writing real bytes followed by sparse-file zeros — corrupts
+    // the assembled stream. Detect via segment-0 decode and rebuild.
+    let actual_stride = decoded.data.len() as u64;
+    let pre_rebuild_total: u64 = segments.iter().map(|s| s.bytes).sum();
+    let total_size = rebuild_for_decoded_stride(&mut segments, actual_stride, decoded.file_size);
+    if total_size != pre_rebuild_total {
+        tracing::info!(
+            "[preflight] flat-mode segment offsets rebuilt: stride {} -> {} bytes, total {} -> {} bytes (indexer reported encoded sizes)",
+            segments.first().map(|s| s.bytes).unwrap_or(0),
+            actual_stride,
+            pre_rebuild_total,
+            total_size,
+        );
     }
 
     let content_type = main
@@ -760,5 +830,104 @@ mod tests {
         let nzb = Nzb::parse(&xml).unwrap();
         let vols = find_rar_volumes(&nzb);
         assert!(vols.is_empty());
+    }
+
+    fn ref_at(message_id: &str, bytes: u64, offset: u64) -> SegmentRef {
+        SegmentRef {
+            server_index: 0,
+            message_id: message_id.to_string(),
+            bytes,
+            offset_in_stream: offset,
+        }
+    }
+
+    #[test]
+    fn rebuild_noop_when_indexer_already_reports_decoded_size() {
+        // Indexer's <segment bytes> matches the actual decoded payload —
+        // no rebuild needed.
+        let mut segs = vec![
+            ref_at("s1", 716_800, 0),
+            ref_at("s2", 716_800, 716_800),
+            ref_at("s3", 200_000, 1_433_600),
+        ];
+        let total = rebuild_for_decoded_stride(&mut segs, 716_800, Some(1_633_600));
+        assert_eq!(total, 1_633_600, "sum of declared bytes preserved");
+        assert_eq!(segs[0].offset_in_stream, 0);
+        assert_eq!(segs[1].offset_in_stream, 716_800);
+        assert_eq!(segs[2].offset_in_stream, 1_433_600);
+        assert_eq!(segs[2].bytes, 200_000, "tail untouched");
+    }
+
+    #[test]
+    fn rebuild_relays_yenc_total_for_tail_size() {
+        // Indexer reports yEnc-encoded size 739_600 per segment, but
+        // decoded is 716_800. yEnc =ybegin reported total file size
+        // 1_900_000 (= 716_800 + 716_800 + 466_400 tail).
+        let mut segs = vec![
+            ref_at("s1", 739_600, 0),
+            ref_at("s2", 739_500, 739_600),
+            ref_at("s3", 480_000, 1_479_100),
+        ];
+        let total = rebuild_for_decoded_stride(&mut segs, 716_800, Some(1_900_000));
+        assert_eq!(total, 1_900_000);
+        assert_eq!(segs[0].offset_in_stream, 0);
+        assert_eq!(segs[0].bytes, 716_800);
+        assert_eq!(segs[1].offset_in_stream, 716_800);
+        assert_eq!(segs[1].bytes, 716_800);
+        assert_eq!(segs[2].offset_in_stream, 1_433_600);
+        assert_eq!(
+            segs[2].bytes, 466_400,
+            "tail = total - (n-1)*stride = 1_900_000 - 1_433_600"
+        );
+    }
+
+    #[test]
+    fn rebuild_falls_back_to_full_stride_when_total_unknown() {
+        // No yEnc total → assume last segment also full stride.
+        // Slight overestimate, but acceptable for posters that omit the
+        // header (very rare).
+        let mut segs = vec![
+            ref_at("s1", 739_600, 0),
+            ref_at("s2", 739_500, 739_600),
+            ref_at("s3", 720_000, 1_479_100),
+        ];
+        let total = rebuild_for_decoded_stride(&mut segs, 716_800, None);
+        assert_eq!(total, 3 * 716_800);
+        for (i, seg) in segs.iter().enumerate() {
+            assert_eq!(seg.offset_in_stream, i as u64 * 716_800);
+            assert_eq!(seg.bytes, 716_800);
+        }
+    }
+
+    #[test]
+    fn rebuild_handles_implausible_total_via_fallback() {
+        // total < (n-1)*stride is nonsense — decode header was probably
+        // garbled. Fall back to assuming uniform stride for everything.
+        let mut segs = vec![
+            ref_at("s1", 739_600, 0),
+            ref_at("s2", 739_500, 739_600),
+            ref_at("s3", 480_000, 1_479_100),
+        ];
+        let total = rebuild_for_decoded_stride(&mut segs, 716_800, Some(100));
+        assert_eq!(total, 3 * 716_800);
+        assert_eq!(segs[2].bytes, 716_800);
+    }
+
+    #[test]
+    fn rebuild_empty_input_is_noop() {
+        let mut segs: Vec<SegmentRef> = Vec::new();
+        let total = rebuild_for_decoded_stride(&mut segs, 716_800, Some(1_900_000));
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn rebuild_single_segment_uses_total_as_size() {
+        // One-segment file: bytes should be the actual file size, not the stride.
+        let mut segs = vec![ref_at("s1", 739_600, 0)];
+        let total = rebuild_for_decoded_stride(&mut segs, 716_800, Some(500_000));
+        assert_eq!(total, 500_000);
+        assert_eq!(segs[0].offset_in_stream, 0);
+        // Last segment carries the tail; min(stride, tail) = 500_000.
+        assert_eq!(segs[0].bytes, 500_000);
     }
 }

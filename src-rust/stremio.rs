@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub id: &'static str,
-    pub name: &'static str,
+    /// Suffixed with the request's host label (e.g. "Tabellarius (10.0.0.5)"
+    /// or "Tabellarius (addon)") so users with the same addon installed via
+    /// multiple URLs can tell them apart. Built per-request, hence `String`,
+    /// not `&'static str`.
+    pub name: String,
     pub description: &'static str,
     /// Built per-request from the addon's base URL so the logo route
     /// resolves correctly behind any reverse proxy. Hence `String`,

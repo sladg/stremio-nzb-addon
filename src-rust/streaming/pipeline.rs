@@ -285,17 +285,14 @@ pub fn find_segment_for_byte(segments: &[SegmentRef], byte: u64) -> Option<usize
 /// defaults to 0), fall back to other servers in index order on transport
 /// error, NNTP non-success codes (430/423), or empty/undecodable payloads.
 ///
-/// **Decoded length vs declared `seg.bytes`:** these can disagree by a
-/// few percent in the wild because different posters/indexers use
-/// different conventions for what `<segment bytes="…">` represents
-/// (decoded payload vs encoded article body). This is **not** a
-/// corruption signal — both servers will return the same payload.
-/// We write whatever decoded bytes we got at `seg.offset_in_stream`,
-/// then zero-pad to the declared size so subsequent reads inside the
-/// segment's slot don't gap-fault. The minor precision loss (a few KiB
-/// of zeros where decoded payload was shorter than declared) is
-/// invisible to MKV/MP4 demuxers in practice; a true segment-level
-/// failure already short-circuits via the empty/error paths above.
+/// **Decoded length vs `seg.bytes`:** preflight reconciles these so
+/// `seg.bytes` reflects actual decoded payload size (see
+/// `streaming::preflight::rebuild_for_decoded_stride`). We write the
+/// decoded bytes verbatim; if the actual payload is longer than `bytes`
+/// (defensive — shouldn't happen post-rebuild) we truncate, never pad.
+/// Earlier versions zero-padded the tail when decoded < declared, which
+/// silently corrupted assembled streams whose poster used encoded-size
+/// `<segment bytes>` semantics.
 async fn ensure_segment_cached<S>(cache: &CachedFile, seg: &SegmentRef, source: &S) -> Result<()>
 where
     S: SegmentSource + ?Sized,
@@ -361,10 +358,13 @@ where
             );
         }
 
-        // Write decoded bytes at the segment's start offset. If the decoded
-        // payload is longer than declared (rare), truncate; if shorter,
-        // pad the tail with zeros so populated-range tracking reaches the
-        // declared slot end and subsequent segments find their offsets.
+        // Write decoded bytes at the segment's start offset. Truncate if
+        // the actual payload exceeds `seg.bytes` (defensive — preflight
+        // reconciles stride against decoded size, so this branch should
+        // not fire post-rebuild). Never pad short — zero-padding the
+        // tail of every segment was the root cause of the assembled-stream
+        // corruption that broke playback for posters whose `<segment bytes>`
+        // meant yEnc-encoded body length rather than decoded payload size.
         let to_write = if decoded.data.len() > declared {
             &decoded.data[..declared]
         } else {
@@ -383,16 +383,13 @@ where
             })?;
 
         if to_write.len() < declared {
-            let pad = vec![0u8; declared - to_write.len()];
-            cache
-                .write_at(seg.offset_in_stream + to_write.len() as u64, &pad)
-                .await?;
-            tracing::debug!(
-                "[pipeline] segment {} padded {} bytes to declared {} (decoded was {})",
+            // Should not happen post-preflight-rebuild. Log loudly so we
+            // notice if a non-uniform poster slips through.
+            tracing::warn!(
+                "[pipeline] segment {} decoded short: {} of declared {} bytes — payload tail will read as sparse zeros (poster has non-uniform segment sizes?)",
                 seg.message_id,
-                pad.len(),
-                declared,
                 decoded.data.len(),
+                declared,
             );
         }
         return Ok(());

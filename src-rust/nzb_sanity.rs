@@ -19,6 +19,17 @@ static RAR_ANY_RE: Lazy<Regex> = Lazy::new(|| {
     .expect("RAR regex")
 });
 
+/// Direct video filename detection — Flat-mode releases post one big video
+/// file directly (no RAR wrapping), which the streaming pipeline supports
+/// natively. Matches the same container types `guess_content_type` recognizes
+/// in `streaming::session`. Subject lookahead requires non-word/non-dot
+/// trailing context so e.g. ".mkvtoolnix" (a project name in a description)
+/// doesn't false-match.
+static VIDEO_ANY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\.(?:mkv|mp4|m4v|avi|webm|mov|ts|wmv)(?:[^.\w]|$)")
+        .expect("video regex")
+});
+
 static SUBJECT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?i)subject="([^"]+)""#).expect("subject regex"));
 
@@ -84,11 +95,18 @@ async fn probe_nzb(client: &reqwest::Client, nzb_url: &str) -> SanityResult {
         };
     }
 
+    // Accept either shape:
+    //   - RAR-wrapped (multi-volume archive of the video, parsed at preflight)
+    //   - Flat (single video file posted directly, streamed as-is)
+    // Anything that's neither is a non-video upload (par2-only, image set,
+    // non-supported container) and gets dropped here so the player never
+    // sees a stream that won't play.
     let has_rar = subjects.iter().any(|s| RAR_ANY_RE.is_match(s));
-    if !has_rar {
+    let has_video = subjects.iter().any(|s| VIDEO_ANY_RE.is_match(s));
+    if !has_rar && !has_video {
         return SanityResult {
             ok: false,
-            reason: Some("no-rar-files".to_string()),
+            reason: Some("no-video-or-rar".to_string()),
         };
     }
 
@@ -188,5 +206,94 @@ mod tests {
             .collect();
         assert_eq!(subjects.len(), 3);
         assert!(subjects.iter().any(|s| s.contains("part01.rar")));
+    }
+
+    fn video_matches(s: &str) -> bool {
+        VIDEO_ANY_RE.is_match(s)
+    }
+
+    #[test]
+    fn video_regex_matches_supported_containers() {
+        assert!(video_matches("Movie.2024.1080p.WEB-DL.mkv yEnc"));
+        assert!(video_matches("Show.S01E01.mp4 yEnc (1/200)"));
+        assert!(video_matches("classic.avi yEnc"));
+        assert!(video_matches("clip.webm yEnc"));
+        assert!(video_matches("trailer.m4v end"));
+        assert!(video_matches("ancient.mov payload"));
+        assert!(video_matches("transport.ts (1/3)"));
+    }
+
+    #[test]
+    fn video_regex_rejects_non_video() {
+        assert!(!video_matches("Movie.par2 yEnc"));
+        assert!(!video_matches("Show.nzb yEnc"));
+        assert!(!video_matches("readme.txt yEnc"));
+        assert!(!video_matches("payload.rar yEnc"));
+        // Subject containing a project/tool name that *contains* a video
+        // extension as a substring should not false-match.
+        assert!(!video_matches("MKVToolnix.guide yEnc"));
+        assert!(!video_matches("how.to.use.mkvmerge.tutorial yEnc"));
+    }
+
+    /// Run the sanity verdict against XML directly — bypasses the HTTP
+    /// fetcher so we can exercise the structure-validation logic without
+    /// a live indexer. Mirrors the parsing in `probe_nzb`.
+    fn verdict_for_xml(xml: &str) -> &'static str {
+        let subjects: Vec<&str> = SUBJECT_RE
+            .captures_iter(xml)
+            .filter_map(|c| c.get(1).map(|m| m.as_str()))
+            .collect();
+        if subjects.is_empty() {
+            return "no-subjects";
+        }
+        let has_rar = subjects.iter().any(|s| RAR_ANY_RE.is_match(s));
+        let has_video = subjects.iter().any(|s| VIDEO_ANY_RE.is_match(s));
+        if !has_rar && !has_video {
+            return "no-video-or-rar";
+        }
+        "ok"
+    }
+
+    #[test]
+    fn flat_release_with_mkv_passes_sanity() {
+        // Modern WEB-DL: one big mkv posted directly, no RAR.
+        let xml = r#"
+            <nzb>
+              <file subject="Mission.Impossible.2025.1080p.AMZN.WEB-DL.DDP.5.1.H.264-PiRaTeS.mkv yEnc (1/4521)"></file>
+              <file subject="Mission.Impossible.2025.1080p.AMZN.WEB-DL.DDP.5.1.H.264-PiRaTeS.par2 yEnc"></file>
+              <file subject="Mission.Impossible.2025.1080p.AMZN.WEB-DL.DDP.5.1.H.264-PiRaTeS.vol00+01.par2 yEnc"></file>
+            </nzb>"#;
+        assert_eq!(verdict_for_xml(xml), "ok", "Flat MKV release must pass");
+    }
+
+    #[test]
+    fn rar_release_still_passes() {
+        // Classic RAR-wrapped scene release.
+        let xml = r#"
+            <nzb>
+              <file subject="release.part01.rar yEnc (1/100)"></file>
+              <file subject="release.part02.rar yEnc (1/100)"></file>
+              <file subject="release.par2 yEnc"></file>
+            </nzb>"#;
+        assert_eq!(verdict_for_xml(xml), "ok", "RAR release must still pass");
+    }
+
+    #[test]
+    fn par2_only_upload_is_rejected() {
+        // Pathological: only par2 files, no video and no RAR. Player would
+        // get nothing; correct to drop at sanity.
+        let xml = r#"
+            <nzb>
+              <file subject="release.par2 yEnc"></file>
+              <file subject="release.vol00+01.par2 yEnc"></file>
+              <file subject="release.vol01+02.par2 yEnc"></file>
+            </nzb>"#;
+        assert_eq!(verdict_for_xml(xml), "no-video-or-rar");
+    }
+
+    #[test]
+    fn empty_subjects_rejected() {
+        let xml = "<nzb></nzb>";
+        assert_eq!(verdict_for_xml(xml), "no-subjects");
     }
 }
