@@ -376,7 +376,10 @@ mod tests {
         let removed = f.evict_range(0, 1024).await.unwrap();
         assert_eq!(removed, 1024);
         assert!(!f.has_range(0, 1024), "evicted range must not be populated");
-        assert!(f.has_range(2048, 3072), "untouched range must still be populated");
+        assert!(
+            f.has_range(2048, 3072),
+            "untouched range must still be populated"
+        );
         assert_eq!(f.populated_bytes(), 1024);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -387,10 +390,13 @@ mod tests {
         let cache = DiskCache::new(dir.clone(), 1024 * 1024);
         let f = cache.open("evict2", 1000).await.unwrap();
         f.write_at(100, &vec![0xAAu8; 200]).await.unwrap(); // [100..300)
-        // Evict bytes [200..400) — should trim the right side of the
-        // populated interval.
+                                                            // Evict bytes [200..400) — should trim the right side of the
+                                                            // populated interval.
         let removed = f.evict_range(200, 400).await.unwrap();
-        assert_eq!(removed, 100, "only [200..300) was populated of the evicted range");
+        assert_eq!(
+            removed, 100,
+            "only [200..300) was populated of the evicted range"
+        );
         assert!(f.has_range(100, 200), "[100..200) should remain populated");
         assert!(!f.has_range(200, 300));
         assert_eq!(f.populated_bytes(), 100);
@@ -484,7 +490,10 @@ mod tests {
             .maybe_evict_behind(10 * 1024 * 1024, 0, 0, 1024 * 1024)
             .await
             .unwrap();
-        assert_eq!(second, 0, "second call with same playhead must not re-punch");
+        assert_eq!(
+            second, 0,
+            "second call with same playhead must not re-punch"
+        );
         assert_eq!(f.last_evicted_to(), 10 * 1024 * 1024);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -502,7 +511,10 @@ mod tests {
         f.write_at(0, &vec![0xEFu8; 1024]).await.unwrap();
         assert!(f.has_range(0, 1024));
         let bytes = f.read_at(0, 1024).await.unwrap();
-        assert!(bytes.iter().all(|&b| b == 0xEF), "re-written bytes must read back");
+        assert!(
+            bytes.iter().all(|&b| b == 0xEF),
+            "re-written bytes must read back"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

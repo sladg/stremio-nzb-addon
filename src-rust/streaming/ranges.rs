@@ -106,7 +106,10 @@ impl PopulatedRanges {
 
         let mut removed = 0u64;
         for istart in candidates {
-            let iend = self.intervals.remove(&istart).expect("just collected start");
+            let iend = self
+                .intervals
+                .remove(&istart)
+                .expect("just collected start");
             let ov_start = istart.max(start);
             let ov_end = iend.min(end);
             removed += ov_end - ov_start;

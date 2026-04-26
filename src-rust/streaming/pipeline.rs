@@ -446,7 +446,10 @@ mod tests {
     }
 
     fn flat_layout(segs: &[SegmentRef]) -> crate::streaming::session::FileLayout {
-        let total = segs.last().map(|s| s.offset_in_stream + s.bytes).unwrap_or(0);
+        let total = segs
+            .last()
+            .map(|s| s.offset_in_stream + s.bytes)
+            .unwrap_or(0);
         crate::streaming::session::FileLayout {
             segments: Arc::from(segs.to_vec().into_boxed_slice()),
             chunks: vec![crate::streaming::session::DataChunk {
@@ -462,7 +465,10 @@ mod tests {
         let s = segs(&[(0, 100), (100, 100), (200, 100), (300, 100)]);
         let layout = flat_layout(&s);
         // Range [50..=250] spans segs 0,1,2.
-        assert_eq!(segment_indices_in_range(&layout, &s, 50, 250), vec![0, 1, 2]);
+        assert_eq!(
+            segment_indices_in_range(&layout, &s, 50, 250),
+            vec![0, 1, 2]
+        );
         // Range entirely inside one segment.
         assert_eq!(segment_indices_in_range(&layout, &s, 110, 150), vec![1]);
         // Full range.
@@ -479,11 +485,11 @@ mod tests {
         // Chunk B covers video [100..200) → assembled [200..300) (skipping 100..200
         // which is RAR header bytes that belong to no video chunk).
         let s = segs(&[
-            (0, 50),     // seg 0 — chunk A
-            (50, 50),    // seg 1 — chunk A
-            (100, 100),  // seg 2 — RAR header bytes (NOT in any video chunk)
-            (200, 50),   // seg 3 — chunk B
-            (250, 50),   // seg 4 — chunk B
+            (0, 50),    // seg 0 — chunk A
+            (50, 50),   // seg 1 — chunk A
+            (100, 100), // seg 2 — RAR header bytes (NOT in any video chunk)
+            (200, 50),  // seg 3 — chunk B
+            (250, 50),  // seg 4 — chunk B
         ]);
         let layout = crate::streaming::session::FileLayout {
             segments: Arc::from(s.clone().into_boxed_slice()),
@@ -600,9 +606,7 @@ mod prefetch_tests {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             {
                 let mut guard = self.server_calls.lock().await;
-                *guard[server_idx]
-                    .entry(message_id.to_string())
-                    .or_insert(0) += 1;
+                *guard[server_idx].entry(message_id.to_string()).or_insert(0) += 1;
             }
             if let Some(d) = self.delay {
                 tokio::time::sleep(d).await;
@@ -681,14 +685,7 @@ mod prefetch_tests {
         cache.write_at(2 * 1024, &pre2).await.unwrap();
 
         let segs_arc: Arc<[SegmentRef]> = Arc::from(segs.into_boxed_slice());
-        prefetch_segments(
-            cache.clone(),
-            source.clone(),
-            segs_arc,
-            vec![0, 1, 2, 3],
-            4,
-        )
-        .await;
+        prefetch_segments(cache.clone(), source.clone(), segs_arc, vec![0, 1, 2, 3], 4).await;
 
         // Mock should only have been hit for segs 1 and 3.
         assert_eq!(
@@ -719,10 +716,7 @@ mod prefetch_tests {
         .await;
 
         let max = source.max_inflight.load(Ordering::SeqCst);
-        assert!(
-            max <= 4,
-            "max_inflight {max} exceeded concurrency bound 4"
-        );
+        assert!(max <= 4, "max_inflight {max} exceeded concurrency bound 4");
         // Sanity: with 16 fetches at concurrency 4, at least 2 should have been
         // simultaneously in flight at some point — otherwise we're effectively
         // sequential and the test isn't actually checking concurrency.
@@ -743,19 +737,21 @@ mod prefetch_tests {
         let source = MockSource::new(payloads, 1).with_failures(&["seg1@test", "seg3@test"]);
 
         let segs_arc: Arc<[SegmentRef]> = Arc::from(segs.into_boxed_slice());
-        prefetch_segments(
-            cache.clone(),
-            source.clone(),
-            segs_arc,
-            vec![0, 1, 2, 3],
-            4,
-        )
-        .await;
+        prefetch_segments(cache.clone(), source.clone(), segs_arc, vec![0, 1, 2, 3], 4).await;
 
         assert!(cache.has_range(0, 1024), "seg 0 should be cached");
-        assert!(!cache.has_range(1024, 2048), "seg 1 must NOT be cached (failed)");
-        assert!(cache.has_range(2 * 1024, 3 * 1024), "seg 2 should be cached");
-        assert!(!cache.has_range(3 * 1024, 4 * 1024), "seg 3 must NOT be cached (failed)");
+        assert!(
+            !cache.has_range(1024, 2048),
+            "seg 1 must NOT be cached (failed)"
+        );
+        assert!(
+            cache.has_range(2 * 1024, 3 * 1024),
+            "seg 2 should be cached"
+        );
+        assert!(
+            !cache.has_range(3 * 1024, 4 * 1024),
+            "seg 3 must NOT be cached (failed)"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -779,17 +775,11 @@ mod prefetch_tests {
             fn source_count(&self) -> usize {
                 self.inner.source_count()
             }
-            async fn fetch_segment(
-                &self,
-                server_idx: usize,
-                message_id: &str,
-            ) -> Result<Vec<u8>> {
+            async fn fetch_segment(&self, server_idx: usize, message_id: &str) -> Result<Vec<u8>> {
                 self.inner.call_count.fetch_add(1, Ordering::SeqCst);
                 {
                     let mut guard = self.inner.server_calls.lock().await;
-                    *guard[server_idx]
-                        .entry(message_id.to_string())
-                        .or_insert(0) += 1;
+                    *guard[server_idx].entry(message_id.to_string()).or_insert(0) += 1;
                 }
                 if server_idx == 0 {
                     return Err(anyhow!("server 0 down for {message_id}"));
@@ -802,9 +792,13 @@ mod prefetch_tests {
             }
         }
         let inner = MockSource::new(payloads, 2);
-        let source = ServerSpecificFailMock { inner: inner.clone() };
+        let source = ServerSpecificFailMock {
+            inner: inner.clone(),
+        };
 
-        ensure_segment_cached(&cache, &segs[0], &source).await.unwrap();
+        ensure_segment_cached(&cache, &segs[0], &source)
+            .await
+            .unwrap();
 
         let server_calls = inner.server_calls.lock().await;
         assert_eq!(
@@ -849,7 +843,11 @@ mod prefetch_tests {
 
     // ---------- end-to-end serve_range_stream ----------
 
-    fn make_active_stream(layout: FileLayout, total_size: u64, cache: Arc<CachedFile>) -> Arc<ActiveStream> {
+    fn make_active_stream(
+        layout: FileLayout,
+        total_size: u64,
+        cache: Arc<CachedFile>,
+    ) -> Arc<ActiveStream> {
         Arc::new(ActiveStream {
             candidate_idx: 0,
             total_size,
@@ -904,7 +902,13 @@ mod prefetch_tests {
         let src1 = MockSource::new(payloads1, 1);
         let active1 = make_active_stream(layout1, total, cache1.clone());
         let bytes_seq = collect_stream_bytes(Box::pin(serve_range_stream(
-            active1, cache1, src1, 0, total - 1, 1, None,
+            active1,
+            cache1,
+            src1,
+            0,
+            total - 1,
+            1,
+            None,
         )))
         .await
         .unwrap();
@@ -914,7 +918,13 @@ mod prefetch_tests {
         let src2 = MockSource::new(payloads2, 1);
         let active2 = make_active_stream(layout2, total, cache2.clone());
         let bytes_ra = collect_stream_bytes(Box::pin(serve_range_stream(
-            active2, cache2, src2, 0, total - 1, 8, None,
+            active2,
+            cache2,
+            src2,
+            0,
+            total - 1,
+            8,
+            None,
         )))
         .await
         .unwrap();
@@ -972,8 +982,13 @@ mod prefetch_tests {
         let source = MockSource::new(payloads, 1);
         let active = make_active_stream(layout, total, cache.clone());
 
-        let policy = EvictPolicy { header_pin, backbuffer, step };
-        let stream = serve_range_stream(active, cache.clone(), source, 0, total - 1, 4, Some(policy));
+        let policy = EvictPolicy {
+            header_pin,
+            backbuffer,
+            step,
+        };
+        let stream =
+            serve_range_stream(active, cache.clone(), source, 0, total - 1, 4, Some(policy));
         let _ = collect_stream_bytes(Box::pin(stream)).await.unwrap();
 
         // After full playback:
@@ -1025,7 +1040,11 @@ mod prefetch_tests {
         let source = MockSource::new(payloads, 1);
         let active = make_active_stream(layout.clone(), total, cache.clone());
 
-        let policy = EvictPolicy { header_pin, backbuffer, step };
+        let policy = EvictPolicy {
+            header_pin,
+            backbuffer,
+            step,
+        };
 
         // First pass: full playback with eviction.
         let stream = serve_range_stream(
@@ -1066,7 +1085,8 @@ mod prefetch_tests {
         assert!(
             calls_after_seek > calls_after_first_pass,
             "seek-back into evicted region should have triggered refetch ({} → {})",
-            calls_after_first_pass, calls_after_seek
+            calls_after_first_pass,
+            calls_after_seek
         );
 
         // And bytes must match.

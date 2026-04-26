@@ -295,7 +295,9 @@ mod tests {
 
         let url = format!("http://{addr}/nzb");
         let client = reqwest::Client::new();
-        let got = fetch_nzb_xml(&client, &url).await.expect("retries should succeed");
+        let got = fetch_nzb_xml(&client, &url)
+            .await
+            .expect("retries should succeed");
         assert_eq!(got.as_str(), "<nzb>ok</nzb>");
         assert_eq!(HITS.load(Ordering::SeqCst), 3, "should have hit 3 times");
 
@@ -327,7 +329,9 @@ mod tests {
 
         let url = format!("http://{addr}/missing");
         let client = reqwest::Client::new();
-        let err = fetch_nzb_xml(&client, &url).await.expect_err("404 should be terminal");
+        let err = fetch_nzb_xml(&client, &url)
+            .await
+            .expect_err("404 should be terminal");
         assert!(matches!(err, NzbFetchError::HttpStatus(404)));
         assert_eq!(HITS.load(Ordering::SeqCst), 1, "must not retry 4xx");
 
@@ -336,7 +340,10 @@ mod tests {
 
     #[tokio::test]
     async fn host_of_extracts_authority() {
-        assert_eq!(host_of("https://api.nzbplanet.net/getnzb/abc.nzb"), "api.nzbplanet.net");
+        assert_eq!(
+            host_of("https://api.nzbplanet.net/getnzb/abc.nzb"),
+            "api.nzbplanet.net"
+        );
         assert_eq!(host_of("http://localhost:1234/x"), "localhost");
         // Garbage URL falls back to the raw input.
         let raw = "not-a-url";
@@ -374,13 +381,20 @@ mod tests {
         let client = reqwest::Client::new();
 
         // First call: 3 retries (initial + 2) all 503 → final 503 → throttle armed.
-        let err1 = fetch_nzb_xml(&client, &url).await.expect_err("first call should fail");
+        let err1 = fetch_nzb_xml(&client, &url)
+            .await
+            .expect_err("first call should fail");
         assert!(matches!(err1, NzbFetchError::HttpStatus(503)));
         let hits_after_first = HITS.load(Ordering::SeqCst);
-        assert_eq!(hits_after_first, 3, "first call should burn 3 retry attempts");
+        assert_eq!(
+            hits_after_first, 3,
+            "first call should burn 3 retry attempts"
+        );
 
         // Second call: should NOT touch the network — IndexerThrottled.
-        let err2 = fetch_nzb_xml(&client, &url).await.expect_err("second call should short-circuit");
+        let err2 = fetch_nzb_xml(&client, &url)
+            .await
+            .expect_err("second call should short-circuit");
         assert!(matches!(err2, NzbFetchError::IndexerThrottled));
         assert_eq!(
             HITS.load(Ordering::SeqCst),
@@ -398,9 +412,10 @@ mod tests {
         // 404 is deterministic, not an indexer-side cap. We must NOT throttle
         // on it — otherwise a single bad URL would stick the whole indexer.
         use axum::{http::StatusCode, routing::get, Router};
-        let app = Router::new().route("/missing", get(|| async {
-            (StatusCode::NOT_FOUND, "nope")
-        }));
+        let app = Router::new().route(
+            "/missing",
+            get(|| async { (StatusCode::NOT_FOUND, "nope") }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -438,7 +453,9 @@ mod tests {
 
         let url = format!("http://{addr}/down");
         let client = reqwest::Client::new();
-        let _ = fetch_nzb_xml(&client, &url).await.expect_err("503 should propagate");
+        let _ = fetch_nzb_xml(&client, &url)
+            .await
+            .expect_err("503 should propagate");
 
         // Cache must be empty for this URL.
         let key = cache_key(&url);
