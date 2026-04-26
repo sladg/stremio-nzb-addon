@@ -86,6 +86,43 @@ impl PopulatedRanges {
         self.intervals.iter().map(|(s, e)| e - s).sum()
     }
 
+    /// Remove `[start, end)` from the populated set. Splits intervals as
+    /// needed; intervals fully contained get dropped, partials get trimmed,
+    /// and a removal punching through the middle of an interval splits it
+    /// in two. Returns the total bytes removed.
+    pub fn remove_range(&mut self, start: u64, end: u64) -> u64 {
+        if start >= end {
+            return 0;
+        }
+        // An interval [istart, iend) overlaps [start, end) iff
+        // istart < end && iend > start. Collect the candidates first to avoid
+        // mutating the BTreeMap while iterating it.
+        let candidates: Vec<u64> = self
+            .intervals
+            .range(..end)
+            .filter(|(_, &iend)| iend > start)
+            .map(|(&s, _)| s)
+            .collect();
+
+        let mut removed = 0u64;
+        for istart in candidates {
+            let iend = self.intervals.remove(&istart).expect("just collected start");
+            let ov_start = istart.max(start);
+            let ov_end = iend.min(end);
+            removed += ov_end - ov_start;
+
+            // Re-insert the unaffected head, if any: [istart, start)
+            if istart < start {
+                self.intervals.insert(istart, start);
+            }
+            // Re-insert the unaffected tail, if any: [end, iend)
+            if iend > end {
+                self.intervals.insert(end, iend);
+            }
+        }
+        removed
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.intervals.is_empty()
@@ -201,5 +238,71 @@ mod tests {
         r.insert(10, 10);
         r.insert(20, 5); // start > end
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn remove_range_drops_fully_contained_interval() {
+        let mut r = PopulatedRanges::new();
+        r.insert(10, 20);
+        r.insert(30, 40);
+        let removed = r.remove_range(0, 50);
+        assert_eq!(removed, 20);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn remove_range_trims_left_overlap() {
+        let mut r = PopulatedRanges::new();
+        r.insert(10, 30);
+        let removed = r.remove_range(0, 20);
+        assert_eq!(removed, 10); // bytes 10..=19 removed
+        assert!(!r.contains_range(10, 20));
+        assert!(r.contains_range(20, 30));
+    }
+
+    #[test]
+    fn remove_range_trims_right_overlap() {
+        let mut r = PopulatedRanges::new();
+        r.insert(10, 30);
+        let removed = r.remove_range(20, 50);
+        assert_eq!(removed, 10);
+        assert!(r.contains_range(10, 20));
+        assert!(!r.contains_range(20, 30));
+    }
+
+    #[test]
+    fn remove_range_splits_enclosed_interval() {
+        let mut r = PopulatedRanges::new();
+        r.insert(0, 100);
+        let removed = r.remove_range(40, 60);
+        assert_eq!(removed, 20);
+        assert!(r.contains_range(0, 40));
+        assert!(!r.contains_range(40, 60));
+        assert!(r.contains_range(60, 100));
+    }
+
+    #[test]
+    fn remove_range_disjoint_is_noop() {
+        let mut r = PopulatedRanges::new();
+        r.insert(10, 20);
+        r.insert(50, 60);
+        let removed = r.remove_range(25, 45);
+        assert_eq!(removed, 0);
+        assert!(r.contains_range(10, 20));
+        assert!(r.contains_range(50, 60));
+    }
+
+    #[test]
+    fn remove_range_handles_multiple_intervals() {
+        let mut r = PopulatedRanges::new();
+        r.insert(0, 10);
+        r.insert(20, 30);
+        r.insert(40, 50);
+        // Remove a swath that nicks the middle interval and skips the others.
+        let removed = r.remove_range(15, 35);
+        assert_eq!(removed, 10); // only 20..30 actually overlapped
+        assert!(r.contains_range(0, 10));
+        assert!(!r.contains_range(20, 30));
+        assert!(r.contains_range(40, 50));
     }
 }

@@ -42,6 +42,7 @@ uuid = { version = "1", features = ["v4"] }
 sha1 = "0.10"
 hex = "0.4"
 futures = "0.3"
+rustix = { version = "0.38", features = ["fs"] }
 
 [profile.release]
 lto = "thin"

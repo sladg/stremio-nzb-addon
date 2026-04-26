@@ -7,17 +7,23 @@ use crate::nzb_api::RssChannel;
 use crate::nzb_availability::AvailabilityResult;
 use crate::nzb_sanity::SanityResult;
 
+/// Search-API result cache. 12h TTL — search results barely change for
+/// older content; the bulk of churn happens in the first few hours after
+/// a release. 12h means a typical "click around in the morning, watch in
+/// the evening" pattern stays cache-warm without a re-search.
 pub static RSS_CACHE: Lazy<Cache<String, Arc<RssChannel>>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(10_000)
-        .time_to_live(Duration::from_secs(3600))
+        .time_to_live(Duration::from_secs(12 * 3600))
         .build()
 });
 
+/// Sanity-check verdict cache. 7 days — a release's RAR-vs-Flat structure
+/// is immutable once posted; a stale verdict can only stay correct.
 pub static SANITY_CACHE: Lazy<Cache<String, SanityResult>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(50_000)
-        .time_to_live(Duration::from_secs(86400))
+        .time_to_live(Duration::from_secs(7 * 86400))
         .build()
 });
 

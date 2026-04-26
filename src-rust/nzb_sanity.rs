@@ -1,13 +1,10 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 use sha1::{Digest, Sha1};
-use std::time::Duration;
 
 use crate::cache::SANITY_CACHE;
 use crate::nzb_api::{item_nzb_url, Item};
-
-const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_NZB_SIZE: u64 = 5 * 1024 * 1024;
+use crate::nzb_fetch::{fetch_nzb_xml, NzbFetchError};
 
 /// RAR-looking filename detection. Wider than the original to cover patterns
 /// seen across indexers and noted in the Usenet-Ultimate reference:
@@ -47,51 +44,36 @@ pub async fn check_nzb_sanity(client: &reqwest::Client, nzb_url: &str) -> Sanity
 }
 
 async fn probe_nzb(client: &reqwest::Client, nzb_url: &str) -> SanityResult {
-    let resp = match client.get(nzb_url).timeout(FETCH_TIMEOUT).send().await {
-        Ok(r) => r,
-        Err(err) => {
+    let xml = match fetch_nzb_xml(client, nzb_url).await {
+        Ok(x) => x,
+        Err(NzbFetchError::HttpStatus(code)) => {
             return SanityResult {
                 ok: false,
-                reason: Some(crate::util::redact_log(&err.to_string())),
+                reason: Some(format!("http-{code}")),
+            };
+        }
+        Err(NzbFetchError::Network(msg)) => {
+            return SanityResult {
+                ok: false,
+                reason: Some(msg),
+            };
+        }
+        Err(NzbFetchError::TooLarge(n)) => {
+            return SanityResult {
+                ok: false,
+                reason: Some(format!("nzb-too-large-{n}")),
+            };
+        }
+        Err(NzbFetchError::IndexerThrottled) => {
+            return SanityResult {
+                ok: false,
+                reason: Some("indexer-throttled".to_string()),
             };
         }
     };
-
-    if !resp.status().is_success() {
-        return SanityResult {
-            ok: false,
-            reason: Some(format!("http-{}", resp.status().as_u16())),
-        };
-    }
-
-    if let Some(cl) = resp.content_length() {
-        if cl > MAX_NZB_SIZE {
-            return SanityResult {
-                ok: false,
-                reason: Some(format!("nzb-too-large-{cl}")),
-            };
-        }
-    }
-
-    let xml = match resp.text().await {
-        Ok(t) => t,
-        Err(err) => {
-            return SanityResult {
-                ok: false,
-                reason: Some(crate::util::redact_log(&err.to_string())),
-            };
-        }
-    };
-
-    if (xml.len() as u64) > MAX_NZB_SIZE {
-        return SanityResult {
-            ok: false,
-            reason: Some(format!("nzb-too-large-{}", xml.len())),
-        };
-    }
 
     let subjects: Vec<&str> = SUBJECT_RE
-        .captures_iter(&xml)
+        .captures_iter(xml.as_str())
         .filter_map(|c| c.get(1).map(|m| m.as_str()))
         .collect();
 

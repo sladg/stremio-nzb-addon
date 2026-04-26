@@ -7,6 +7,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -47,6 +48,11 @@ pub struct CachedFile {
     /// Avoids the unnecessary task-yield overhead of `tokio::sync::Mutex`
     /// for what's effectively an in-memory data structure.
     populated: StdMutex<PopulatedRanges>,
+    /// Highest assembled-byte offset already evicted via `evict_range`.
+    /// `maybe_evict_behind` uses this as the lower bound of the next
+    /// eviction window, so the same range never gets punched twice.
+    /// Read/written hot-path so kept lock-free.
+    last_evicted_to: AtomicU64,
 }
 
 impl std::fmt::Debug for CachedFile {
@@ -80,6 +86,7 @@ impl CachedFile {
             total_size,
             file: Mutex::new(file),
             populated: StdMutex::new(PopulatedRanges::new()),
+            last_evicted_to: AtomicU64::new(0),
         })
     }
 
@@ -172,6 +179,113 @@ impl CachedFile {
             .expect("populated mutex poisoned")
             .total_bytes()
     }
+
+    /// Punch a hole in `[start, end)`, freeing real disk space (Linux), and
+    /// remove the range from populated-bookkeeping so subsequent reads of
+    /// these bytes correctly trigger a re-fetch via the streaming pipeline.
+    ///
+    /// **Platform behavior:** uses `fallocate(PUNCH_HOLE | KEEP_SIZE)` on
+    /// Linux. On non-Linux (macOS dev) the syscall is a no-op — populated
+    /// bookkeeping is still cleared so the *logical* eviction proceeds, but
+    /// real disk usage will not shrink. Production runs on Linux.
+    ///
+    /// Returns the number of populated-bookkeeping bytes that were removed.
+    /// Note this may be less than `end - start` if the range was already
+    /// partly unpopulated; the syscall is still issued for the full range.
+    pub async fn evict_range(&self, start: u64, end: u64) -> Result<u64> {
+        if start >= end {
+            return Ok(0);
+        }
+        if end > self.total_size {
+            return Err(anyhow!(
+                "evict past end of cache file: end {end} > total {}",
+                self.total_size
+            ));
+        }
+        // Punch the hole on the OS first; if that fails we don't want to
+        // corrupt the populated tracker (which would silently zero-fill
+        // those bytes on a subsequent read).
+        punch_hole(&self.file, start, end - start).await?;
+
+        // Now safe to update bookkeeping.
+        let removed = self
+            .populated
+            .lock()
+            .expect("populated mutex poisoned")
+            .remove_range(start, end);
+
+        Ok(removed)
+    }
+
+    /// Sliding-window eviction policy. Punches `[last_evicted_to,
+    /// max(header_pin, playhead - backbuffer))` if that window is at least
+    /// `step` bytes wide; otherwise no-op. Idempotent: subsequent calls
+    /// with the same playhead do nothing.
+    ///
+    /// Bytes below `header_pin` are never evicted — protects video-container
+    /// headers that demuxers re-read on seek.
+    pub async fn maybe_evict_behind(
+        &self,
+        playhead: u64,
+        header_pin: u64,
+        backbuffer: u64,
+        step: u64,
+    ) -> Result<u64> {
+        // The frontier we want to keep populated below the playhead.
+        let keep_floor = playhead.saturating_sub(backbuffer);
+        let evict_to = keep_floor.max(header_pin);
+        // Floor the from-side at header_pin too — on first call the
+        // watermark is 0 but we must never punch below the pin.
+        let evict_from = self.last_evicted_to.load(Ordering::Relaxed).max(header_pin);
+
+        if evict_to <= evict_from {
+            return Ok(0);
+        }
+        if evict_to - evict_from < step {
+            return Ok(0); // not worth a syscall yet
+        }
+
+        let removed = self.evict_range(evict_from, evict_to).await?;
+        // Advance the watermark so we don't re-punch the same range. This is
+        // a single-writer pattern (only the foreground yield loop calls it
+        // for a given session) so a simple store is fine — no CAS needed.
+        self.last_evicted_to.store(evict_to, Ordering::Relaxed);
+        tracing::debug!(
+            "[cache] evicted {removed} bytes [{evict_from}..{evict_to}) playhead={playhead} pin={header_pin} backbuf={backbuffer}",
+        );
+        Ok(removed)
+    }
+
+    /// Eviction watermark — for tests/observability.
+    #[cfg(test)]
+    pub fn last_evicted_to(&self) -> u64 {
+        self.last_evicted_to.load(Ordering::Relaxed)
+    }
+}
+
+/// Linux: `fallocate(PUNCH_HOLE | KEEP_SIZE, offset, len)`. Non-Linux: no-op.
+#[cfg(target_os = "linux")]
+async fn punch_hole(file: &Mutex<File>, offset: u64, len: u64) -> Result<()> {
+    use rustix::fs::{fallocate, FallocateFlags};
+    use std::os::fd::AsFd;
+    let guard = file.lock().await;
+    let fd = guard.as_fd();
+    fallocate(
+        fd,
+        FallocateFlags::PUNCH_HOLE | FallocateFlags::KEEP_SIZE,
+        offset,
+        len,
+    )
+    .with_context(|| format!("fallocate PUNCH_HOLE offset={offset} len={len}"))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn punch_hole(_file: &Mutex<File>, _offset: u64, _len: u64) -> Result<()> {
+    // No-op on macOS dev — populated bookkeeping is still cleared by the
+    // caller so the logical eviction proceeds; only real disk usage
+    // (visible via `du`/`stat` blocks) is unaffected.
+    Ok(())
 }
 
 #[cfg(test)]
@@ -243,6 +357,152 @@ mod tests {
         f.write_at(0, b"abcd").await.unwrap();
         f.write_at(100, b"xyz").await.unwrap();
         assert_eq!(f.populated_bytes(), 7);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---------- eviction ----------
+
+    #[tokio::test]
+    async fn evict_range_clears_populated_bookkeeping() {
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 1024 * 1024);
+        let f = cache.open("evict1", 4096).await.unwrap();
+        // Populate two regions.
+        f.write_at(0, &vec![1u8; 1024]).await.unwrap();
+        f.write_at(2048, &vec![2u8; 1024]).await.unwrap();
+        assert_eq!(f.populated_bytes(), 2048);
+
+        // Evict the first region.
+        let removed = f.evict_range(0, 1024).await.unwrap();
+        assert_eq!(removed, 1024);
+        assert!(!f.has_range(0, 1024), "evicted range must not be populated");
+        assert!(f.has_range(2048, 3072), "untouched range must still be populated");
+        assert_eq!(f.populated_bytes(), 1024);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn evict_range_partial_overlap_is_correct() {
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 1024 * 1024);
+        let f = cache.open("evict2", 1000).await.unwrap();
+        f.write_at(100, &vec![0xAAu8; 200]).await.unwrap(); // [100..300)
+        // Evict bytes [200..400) — should trim the right side of the
+        // populated interval.
+        let removed = f.evict_range(200, 400).await.unwrap();
+        assert_eq!(removed, 100, "only [200..300) was populated of the evicted range");
+        assert!(f.has_range(100, 200), "[100..200) should remain populated");
+        assert!(!f.has_range(200, 300));
+        assert_eq!(f.populated_bytes(), 100);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn evict_past_end_errors() {
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 1024 * 1024);
+        let f = cache.open("evict3", 100).await.unwrap();
+        assert!(f.evict_range(50, 200).await.is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn maybe_evict_behind_respects_header_pin() {
+        // Fully populate a 10 MiB sparse file. Playhead at 8 MiB,
+        // header_pin = 1 MiB, backbuffer = 0, step = 1 MiB. Eviction should
+        // punch [0..1 MiB)?? Actually evict_to = max(header_pin=1MiB,
+        // playhead - backbuffer = 8MiB) = 8MiB; from = last_evicted_to = 0;
+        // 8MiB - 0 = 8MiB ≥ step → punches [0, 8MiB). But header_pin=1MiB
+        // means we shouldn't touch [0..1MiB). The current policy starts
+        // eviction at last_evicted_to (0), so it WOULD include the header
+        // region. Verify the policy clamps the floor to header_pin.
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 50 * 1024 * 1024);
+        let total = 10 * 1024 * 1024u64;
+        let f = cache.open("evict4", total).await.unwrap();
+        f.write_at(0, &vec![0u8; total as usize]).await.unwrap();
+        assert_eq!(f.populated_bytes(), total);
+
+        // Trigger eviction with a 1 MiB header pin and zero backbuffer.
+        let header_pin = 1024 * 1024u64;
+        let evicted = f
+            .maybe_evict_behind(8 * 1024 * 1024, header_pin, 0, 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(evicted > 0, "should have evicted something");
+
+        // Header region must still be populated.
+        assert!(
+            f.has_range(0, header_pin),
+            "header pin region must survive eviction"
+        );
+        // Region just past the pin should be evicted.
+        assert!(
+            !f.has_range(header_pin, header_pin + 1024),
+            "region above header pin should be evicted"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn maybe_evict_behind_skips_below_step_threshold() {
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 50 * 1024 * 1024);
+        let f = cache.open("evict5", 10 * 1024 * 1024).await.unwrap();
+        f.write_at(0, &vec![0u8; 10 * 1024 * 1024]).await.unwrap();
+
+        // Playhead = 1 MiB, backbuffer = 0, step = 4 MiB. Eviction window
+        // would be [0..1 MiB) = 1 MiB, below the 4 MiB step threshold.
+        let evicted = f
+            .maybe_evict_behind(1024 * 1024, 0, 0, 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(evicted, 0, "should not evict below step threshold");
+        assert_eq!(f.last_evicted_to(), 0, "watermark must not advance");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn maybe_evict_behind_advances_watermark_idempotently() {
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 50 * 1024 * 1024);
+        let total = 20 * 1024 * 1024u64;
+        let f = cache.open("evict6", total).await.unwrap();
+        f.write_at(0, &vec![0u8; total as usize]).await.unwrap();
+
+        // First call: playhead at 10 MiB, no backbuffer, step = 1 MiB.
+        // Should evict [0..10 MiB) and advance watermark to 10 MiB.
+        let first = f
+            .maybe_evict_behind(10 * 1024 * 1024, 0, 0, 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(first, 10 * 1024 * 1024);
+        assert_eq!(f.last_evicted_to(), 10 * 1024 * 1024);
+
+        // Second call: same playhead. Should be a no-op (idempotent).
+        let second = f
+            .maybe_evict_behind(10 * 1024 * 1024, 0, 0, 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(second, 0, "second call with same playhead must not re-punch");
+        assert_eq!(f.last_evicted_to(), 10 * 1024 * 1024);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn evicted_range_can_be_re_populated() {
+        // Sanity: after eviction, the same range can be written again
+        // (i.e. punching holes hasn't broken the file's writability).
+        let dir = tempdir();
+        let cache = DiskCache::new(dir.clone(), 1024 * 1024);
+        let f = cache.open("evict7", 4096).await.unwrap();
+        f.write_at(0, &vec![0xCDu8; 1024]).await.unwrap();
+        f.evict_range(0, 1024).await.unwrap();
+        assert!(!f.has_range(0, 1024));
+        f.write_at(0, &vec![0xEFu8; 1024]).await.unwrap();
+        assert!(f.has_range(0, 1024));
+        let bytes = f.read_at(0, 1024).await.unwrap();
+        assert!(bytes.iter().all(|&b| b == 0xEF), "re-written bytes must read back");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

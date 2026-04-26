@@ -13,7 +13,8 @@ From Stremio's perspective it's a normal HTTP stream addon — all the NNTP/yEnc
 - **Quality gates** — bandwidth window in Gbit/h plus a regex blocklist for unwanted release types.
 - **Language preferences** — ISO codes, full names, or the `original` token (resolves the title's production country to its language via Cinemeta — Korean show → Korean, German movie → German, etc.).
 - **Flat and RARed releases** — bare video NZBs plus uncompressed multi-volume RARs stream directly; compressed or encrypted RARs are rejected at pre-flight.
-- **HTTP range streaming** — segments are fetched on demand from NNTP, decoded, and served as HTTP byte-range responses. Supports seek/scrub. Sparse disk cache with configurable size cap; idle sessions evicted automatically.
+- **HTTP range streaming with bounded read-ahead** — segments are fetched on demand from NNTP, decoded, and served as HTTP byte-range responses. Supports seek/scrub. A configurable lookahead window (default 8 segments) prefetches ahead of the playhead so per-stream throughput is pool-bound rather than RTT-bound, lifting playback from ~3 MB/s sequential to ~15–20 MB/s.
+- **Sliding-window cache eviction** — sparse disk cache with configurable size cap. Per active stream, bytes behind the playhead are punched out of the cache file via `fallocate(PUNCH_HOLE)` once they're past the backbuffer (default 1 GiB), with a pinned header region (default 64 MiB) that survives eviction so demuxers can re-read container metadata on seek. A 20 GiB stream's real disk usage settles around 1 GiB instead of growing to the full file size.
 - **Multi-server NNTP failover** — each segment is tried against all configured NNTP servers in order; playback continues if one server is missing an article.
 - **Multi-user with access keys** — share with friends without exposing your indexer or NNTP credentials. Each user gets their own URL key with per-user overrides for languages, quality gates, and indexers. `requireAuth = true` refuses to boot with an empty user list.
 
@@ -64,8 +65,12 @@ Generate access keys with `openssl rand -hex 16`.
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `CACHE_BYTES` | `1073741824` (1 GiB) | streaming cache size cap |
+| `CACHE_BYTES` | `1073741824` (1 GiB) | streaming cache size cap (real-bytes accounted) |
 | `CACHE_DIR` | `/cache` | streaming cache path |
+| `READ_AHEAD_SEGMENTS` | `8` | NNTP segment fetches kept in flight ahead of the playhead per stream (set to `1` for sequential) |
+| `CACHE_HEADER_PIN_BYTES` | `67108864` (64 MiB) | bytes at start of each stream's cache file that are never evicted (preserves container headers across seeks) |
+| `CACHE_BACKBUFFER_BYTES` | `1073741824` (1 GiB) | bytes kept populated behind the playhead (set to `0` to disable sliding-window eviction) |
+| `CACHE_EVICT_STEP_BYTES` | `268435456` (256 MiB) | minimum size of a single `fallocate(PUNCH_HOLE)` op (smaller = more syscalls; larger = stale bytes linger longer) |
 | `IDLE_TIMEOUT_SECS` | `3600` | idle-session GC threshold |
 | `PROTECT_WINDOW_SECS` | `300` | recently-active sessions immune from cap-eviction |
 | `RATE_LIMIT_PER_MINUTE` | `60` | per-IP request limit (0 disables) |
@@ -78,6 +83,8 @@ Generate access keys with `openssl rand -hex 16`.
 | `PORT` | `3000` | listen port |
 | `CONFIG_PATH` | `/config.toml` | config file path |
 | `RUST_LOG` | `info` | tracing filter |
+
+For a deep dive on how the streaming pipeline sizes up under load — RAM/disk/NNTP-conn footprint per stream, and what changes at 1×/3×/5× concurrency — see [`RESOURCE_PROFILE.md`](./RESOURCE_PROFILE.md).
 
 ## Public deployments
 

@@ -8,6 +8,7 @@ mod ip_ban;
 mod manifest;
 mod nzb_api;
 mod nzb_availability;
+mod nzb_fetch;
 mod nzb_sanity;
 mod parse_title;
 mod quality;
@@ -58,6 +59,14 @@ pub struct AppState {
     /// only enable when behind a known reverse proxy that strips these
     /// headers from inbound requests, otherwise IPs are spoofable.
     pub trust_proxy_headers: bool,
+    /// Max number of NNTP segment fetches the streaming pipeline keeps in
+    /// flight ahead of the playhead per active stream. 1 = pure sequential
+    /// (legacy behavior). Sized via `READ_AHEAD_SEGMENTS` env var.
+    pub read_ahead_segments: usize,
+    /// Sliding-window eviction policy applied per stream. `None` disables
+    /// eviction (cache grows to total_size). Sized via `CACHE_HEADER_PIN_BYTES`
+    /// / `CACHE_BACKBUFFER_BYTES` / `CACHE_EVICT_STEP_BYTES` env vars.
+    pub evict_policy: Option<streaming::pipeline::EvictPolicy>,
 }
 
 #[tokio::main]
@@ -170,6 +179,46 @@ async fn main() {
         .ok()
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
+    // Read-ahead concurrency for the streaming pipeline. 8 = ~6 MiB max in
+    // flight per stream (8 × ~750 KiB segments) — well under any reasonable
+    // NNTP pool size and bound enough that a stuck fetch can't balloon RAM.
+    // Set to 1 to disable read-ahead and fall back to sequential behavior.
+    let read_ahead_segments: usize = std::env::var("READ_AHEAD_SEGMENTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    tracing::info!("[pipeline] read-ahead segments per stream: {read_ahead_segments}");
+
+    // Sliding-window cache eviction. See RESOURCE_PROFILE.md for sizing.
+    // Defaults: 64 MiB header pin, 1 GiB backbuffer, 256 MiB step. Per-stream
+    // footprint settles at ~1.06 GiB. Set CACHE_BACKBUFFER_BYTES=0 to disable
+    // and let the cache grow to full video size (legacy behavior).
+    let header_pin_bytes: u64 = std::env::var("CACHE_HEADER_PIN_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(64 * 1024 * 1024);
+    let backbuffer_bytes: u64 = std::env::var("CACHE_BACKBUFFER_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1024 * 1024 * 1024);
+    let evict_step_bytes: u64 = std::env::var("CACHE_EVICT_STEP_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(256 * 1024 * 1024);
+    let evict_policy = if backbuffer_bytes == 0 {
+        tracing::info!("[pipeline] cache eviction disabled (CACHE_BACKBUFFER_BYTES=0)");
+        None
+    } else {
+        tracing::info!(
+            "[pipeline] cache eviction: header_pin={header_pin_bytes} backbuffer={backbuffer_bytes} step={evict_step_bytes}"
+        );
+        Some(streaming::pipeline::EvictPolicy {
+            header_pin: header_pin_bytes,
+            backbuffer: backbuffer_bytes,
+            step: evict_step_bytes,
+        })
+    };
+
     if trust_proxy_headers {
         tracing::info!(
             "[ban] trusting X-Forwarded-For / X-Real-IP headers (TRUST_PROXY_HEADERS=1) — ensure the addon sits behind a reverse proxy that strips inbound copies"
@@ -185,6 +234,8 @@ async fn main() {
         started_at: std::time::Instant::now(),
         ban_list: BanList::new(ban_config),
         trust_proxy_headers,
+        read_ahead_segments,
+        evict_policy,
     });
 
     // GC: prunes idle sessions + enforces cache disk-byte cap.
@@ -650,8 +701,15 @@ async fn video_route(
     // No deep clone — `active` is `&Arc<ActiveStream>`, the .clone() bumps
     // the refcount only.
     let cache_file = active.cache_file.clone();
-    let body_stream =
-        streaming::pipeline::serve_range_stream(active.clone(), cache_file, nntp, start, end);
+    let body_stream = streaming::pipeline::serve_range_stream(
+        active.clone(),
+        cache_file,
+        nntp,
+        start,
+        end,
+        state.read_ahead_segments,
+        state.evict_policy,
+    );
     // Adapt anyhow::Error to std::io::Error for axum's Body::from_stream.
     let mapped = futures::StreamExt::map(body_stream, |r| {
         r.map_err(|e| std::io::Error::other(e.to_string()))

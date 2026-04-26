@@ -131,9 +131,11 @@ async fn evict_session(registry: &SessionRegistry, cache_root: &Path, token: &st
     }
 }
 
-/// Sum of cache-file sizes under `cache_root`. Uses `metadata.len()` which
-/// reports logical (sparse) size on macOS/Linux — fine as a conservative
-/// upper bound on disk pressure. Also exposed for `/api/status`.
+/// Sum of *real* cache-file disk usage under `cache_root`. Counts allocated
+/// blocks (not logical sparse size), so cache files that are large but
+/// mostly hole-punched count what they actually consume on disk. This is
+/// what makes the `max_bytes` cap meaningful once sliding-window eviction
+/// is active. Also exposed for `/api/status`.
 pub async fn total_disk_bytes(cache_root: &Path) -> u64 {
     let Ok(mut rd) = tokio::fs::read_dir(cache_root).await else {
         return 0;
@@ -142,7 +144,7 @@ pub async fn total_disk_bytes(cache_root: &Path) -> u64 {
     while let Ok(Some(entry)) = rd.next_entry().await {
         if let Ok(meta) = entry.metadata().await {
             if meta.is_file() {
-                total += meta.len();
+                total += real_bytes(&meta);
             }
         }
     }
@@ -152,8 +154,24 @@ pub async fn total_disk_bytes(cache_root: &Path) -> u64 {
 async fn file_bytes(path: &Path) -> u64 {
     tokio::fs::metadata(path)
         .await
-        .map(|m| m.len())
+        .map(|m| real_bytes(&m))
         .unwrap_or(0)
+}
+
+/// Real on-disk usage from a `Metadata`. On Unix, `st_blocks * 512` (POSIX
+/// guarantees 512-byte blocks for `st_blocks` regardless of the
+/// filesystem's block size). On other platforms, falls back to logical
+/// `len()` — only matters for macOS dev, prod is Linux.
+fn real_bytes(meta: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.blocks() * 512
+    }
+    #[cfg(not(unix))]
+    {
+        meta.len()
+    }
 }
 
 /// Clear all `.bin` files in the cache directory. Called at boot to reap

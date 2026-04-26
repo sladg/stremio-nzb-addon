@@ -14,7 +14,6 @@ use nzb_rs::{File as NzbFile, Nzb};
 use nzbdav_rar::{parse_all_headers, FileHeader, RarHeader};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::time::Duration;
 use thiserror::Error;
 
 use crate::streaming::disk_cache::DiskCache;
@@ -23,9 +22,6 @@ use crate::streaming::session::{
     guess_content_type, ActiveStream, DataChunk, FileLayout, SegmentRef,
 };
 use std::sync::Arc;
-
-const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_NZB_SIZE: u64 = 5 * 1024 * 1024;
 
 /// Failure modes for `probe_candidate`. Caller advances to the next
 /// candidate on any of these except `Internal` (which indicates a bug).
@@ -549,33 +545,18 @@ async fn probe_rar_inner(
 }
 
 async fn fetch_and_parse(http: &reqwest::Client, nzb_url: &str) -> Result<Nzb, PreflightError> {
-    let resp = http
-        .get(nzb_url)
-        .timeout(FETCH_TIMEOUT)
-        .send()
+    let xml = crate::nzb_fetch::fetch_nzb_xml(http, nzb_url)
         .await
-        .map_err(|e| PreflightError::HttpFetch(crate::util::redact_log(&e.to_string())))?;
+        .map_err(|e| match e {
+            crate::nzb_fetch::NzbFetchError::HttpStatus(code) => PreflightError::HttpStatus(code),
+            crate::nzb_fetch::NzbFetchError::Network(msg) => PreflightError::HttpFetch(msg),
+            crate::nzb_fetch::NzbFetchError::TooLarge(n) => PreflightError::NzbTooLarge(n),
+            // Throttle treated as a 503 from the caller's perspective —
+            // candidate is dropped, preflight tries the next one.
+            crate::nzb_fetch::NzbFetchError::IndexerThrottled => PreflightError::HttpStatus(503),
+        })?;
 
-    let status = resp.status().as_u16();
-    if !resp.status().is_success() {
-        return Err(PreflightError::HttpStatus(status));
-    }
-
-    if let Some(cl) = resp.content_length() {
-        if cl > MAX_NZB_SIZE {
-            return Err(PreflightError::NzbTooLarge(cl));
-        }
-    }
-
-    let xml = resp
-        .text()
-        .await
-        .map_err(|e| PreflightError::HttpFetch(crate::util::redact_log(&e.to_string())))?;
-    if (xml.len() as u64) > MAX_NZB_SIZE {
-        return Err(PreflightError::NzbTooLarge(xml.len() as u64));
-    }
-
-    Nzb::parse(&xml)
+    Nzb::parse(xml.as_str())
         .map_err(|e| PreflightError::NzbParse(e.to_string()))
         .context("parsing NZB")
         .map_err(PreflightError::Internal)

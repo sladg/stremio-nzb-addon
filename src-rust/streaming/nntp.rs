@@ -12,9 +12,40 @@
 
 use anyhow::{anyhow, Context, Result};
 use nzb_nntp::{ConnectionPool, ServerConfig};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
+
+/// Pluggable interface the streaming pipeline uses to pull segment bytes.
+/// Production wiring is `NntpPool`; tests provide an in-memory mock to
+/// exercise the read-ahead and yield-ordering logic without a real Usenet
+/// server in the loop.
+///
+/// Uses native `async fn in trait` (Rust 1.75+) so we don't pull in
+/// `async-trait`; consumers take `&S: SegmentSource` (generic), not
+/// `&dyn SegmentSource` — object safety isn't needed.
+pub trait SegmentSource: Send + Sync {
+    fn source_count(&self) -> usize;
+    fn fetch_segment(
+        &self,
+        server_idx: usize,
+        message_id: &str,
+    ) -> impl Future<Output = Result<Vec<u8>>> + Send;
+}
+
+impl SegmentSource for NntpPool {
+    fn source_count(&self) -> usize {
+        self.server_count()
+    }
+    fn fetch_segment(
+        &self,
+        server_idx: usize,
+        message_id: &str,
+    ) -> impl Future<Output = Result<Vec<u8>>> + Send {
+        self.fetch_article(server_idx, message_id)
+    }
+}
 
 /// Parse a Stremio-style NNTP server URL into a `nzb_nntp::ServerConfig`.
 ///

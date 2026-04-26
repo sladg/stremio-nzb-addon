@@ -124,6 +124,26 @@ fn limit_groups_per_resolution(
     kept
 }
 
+/// Cap items to at most `cap_per_bucket` per (resolution, language) bucket,
+/// keeping the highest-quality. Used to shrink the candidate pool before
+/// per-item validation (sanity download, NNTP availability probe) so we
+/// don't burn indexer/NNTP round-trips on items that would be dropped by
+/// the final per-resolution cap anyway.
+fn cap_items_per_resolution(items: Vec<Item>, cap_per_bucket: u32) -> Vec<Item> {
+    if cap_per_bucket == 0 || items.is_empty() {
+        return items;
+    }
+    let mut sorted = items;
+    sort_by_resolution(&mut sorted);
+    let candidates: Vec<NzbCandidate> = sorted.into_iter().map(candidate_from_item).collect();
+    let groups = group_candidates(candidates);
+    let limited = limit_groups_per_resolution(groups, cap_per_bucket);
+    // Flatten back: each group is Vec<NzbCandidate> sharing a signature; pull
+    // .item from each. Order preserved because limit_groups_per_resolution +
+    // group_candidates both walk in input order.
+    limited.into_iter().flatten().map(|c| c.item).collect()
+}
+
 fn human_size(size: u64) -> String {
     if size == 0 {
         return "0 B".to_string();
@@ -343,6 +363,24 @@ pub async fn build_streams(
 
     items = filter_by_language(items, &effective_languages);
 
+    // Shrink the candidate pool BEFORE per-item validation (sanity download
+    // + NNTP availability probe) so we don't burn indexer-quota / NNTP
+    // round-trips on items we'd drop in the per-resolution cap anyway.
+    // Buffer factor 2x (min 4) covers expected validation drops without
+    // falling below the final cap. With per_res=2, this caps the input to
+    // sanity at ~4 items per (resolution, language) bucket — typically
+    // 5-10× fewer .nzb fetches per search than before.
+    let per_res = user.streams_per_resolution.unwrap_or(1);
+    let pre_validation_cap = (per_res * 2).max(4);
+    let pre_count = items.len();
+    items = cap_items_per_resolution(items, pre_validation_cap);
+    if items.len() < pre_count {
+        tracing::info!(
+            "[preValidationCap] reduced {pre_count} → {} candidates (buffer cap = {pre_validation_cap} per bucket)",
+            items.len(),
+        );
+    }
+
     if user.validate_nzb_structure.unwrap_or(false) && !items.is_empty() {
         items = filter_by_nzb_sanity(&client, items).await;
     }
@@ -354,8 +392,6 @@ pub async fn build_streams(
     }
 
     sort_by_resolution(&mut items);
-
-    let per_res = user.streams_per_resolution.unwrap_or(1);
 
     // Phase 5: collapse re-uploads of the same release (= same GroupSignature)
     // into a single Stremio entry whose pre-flight walks the upload list.
