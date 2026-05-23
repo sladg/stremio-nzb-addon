@@ -187,6 +187,83 @@ pub fn rebuild_for_decoded_stride(
     computed_total
 }
 
+/// Per-volume decoded geometry needed to lay a RAR volume's segments out in
+/// *decoded* space. `data_start`/`data_size` come from the RAR file header
+/// (decoded-space offsets); `decoded_stride`/`decoded_file_size` come from
+/// decoding the volume's first segment (the yEnc part size and `=ybegin size=`).
+pub(crate) struct RarVolumeGeom {
+    /// Volume segment message-ids, sorted by yEnc part number ascending.
+    pub message_ids: Vec<String>,
+    /// Decoded payload size of part 0 — the uniform per-part stride (yEnc
+    /// posts use a fixed part size except the last). Mirrors the Flat
+    /// `rebuild_for_decoded_stride` assumption.
+    pub decoded_stride: u64,
+    /// Total decoded size of the whole volume (.rar file) from the yEnc
+    /// `=ybegin size=`. Gives the exact size of the partial last part;
+    /// `None` falls back to assuming the last part is a full stride.
+    pub decoded_file_size: Option<u64>,
+    /// Decoded byte offset where the embedded file's data begins in this
+    /// volume (after the RAR headers).
+    pub data_start: u64,
+    /// Decoded byte length of the embedded file's data carried by this volume.
+    pub data_size: u64,
+}
+
+/// Build a RAR `FileLayout` (segments + chunks) in *decoded* space.
+///
+/// The bug this fixes: the original RAR path cumulated segment offsets from
+/// the NZB `<segment bytes>` (yEnc-*encoded* lengths, ~3% larger than the
+/// decoded payload), while `data_start`/`data_size` are decoded-space. The
+/// streaming layer writes decoded bytes at encoded offsets, leaving a
+/// sparse-zero gap at every segment tail — corrupting playback.
+///
+/// Here segment offsets cumulate the *decoded* stride, so the assembled
+/// stream equals the real decoded concatenation and `data_start` lines up.
+/// Returns `(segments, chunks, total_video_size)` where total is the sum of
+/// per-volume `data_size`.
+pub(crate) fn build_rar_layout(volumes: &[RarVolumeGeom]) -> (Vec<SegmentRef>, Vec<DataChunk>, u64) {
+    let mut segments: Vec<SegmentRef> = Vec::new();
+    let mut chunks: Vec<DataChunk> = Vec::new();
+    let mut assembled: u64 = 0;
+    let mut video: u64 = 0;
+
+    for v in volumes {
+        let n = v.message_ids.len() as u64;
+        let stride = v.decoded_stride;
+        // Whole-volume decoded size. Prefer the yEnc `=ybegin size=`; fall
+        // back to a full-stride last part when it's missing or implausible.
+        let vol_total = match v.decoded_file_size {
+            Some(fs) if fs > 0 && fs >= n.saturating_sub(1) * stride => fs,
+            _ => n * stride,
+        };
+        let vol_start = assembled;
+        for (i, msg) in v.message_ids.iter().enumerate() {
+            let i = i as u64;
+            let bytes = if i + 1 < n {
+                stride
+            } else {
+                // Last part carries the volume tail (= total − preceding parts).
+                vol_total.saturating_sub((n - 1) * stride)
+            };
+            segments.push(SegmentRef {
+                server_index: 0,
+                message_id: msg.clone(),
+                bytes,
+                offset_in_stream: assembled,
+            });
+            assembled += bytes;
+        }
+        chunks.push(DataChunk {
+            video_start: video,
+            length: v.data_size,
+            assembled_start: vol_start + v.data_start,
+        });
+        video += v.data_size;
+    }
+
+    (segments, chunks, video)
+}
+
 /// Probe a single NZB URL for Flat-mode playability. Returns a fully-built
 /// `ActiveStream` ready for Phase 3+ to serve bytes from.
 pub async fn probe_candidate(
@@ -392,6 +469,14 @@ fn parse_volume_headers(
     }
 }
 
+/// A volume's first segment, decoded once during pre-flight: the raw header
+/// bytes (for RAR parsing) plus the decoded geometry `build_rar_layout` needs.
+struct VolFirstSegment {
+    data: Vec<u8>,
+    decoded_stride: u64,
+    decoded_file_size: Option<u64>,
+}
+
 /// RAR-mode pre-flight. Fetches volume headers in parallel, parses each, and
 /// builds a unified `FileLayout` with one `DataChunk` per volume.
 async fn probe_rar_inner(
@@ -428,10 +513,17 @@ async fn probe_rar_inner(
             if decoded.data.is_empty() {
                 return Err(PreflightError::EmptyPayload);
             }
-            Ok::<Vec<u8>, PreflightError>(decoded.data)
+            // Keep the decoded stride + total volume size alongside the header
+            // bytes — `build_rar_layout` needs them to space segments in
+            // decoded (not encoded) space.
+            Ok::<VolFirstSegment, PreflightError>(VolFirstSegment {
+                decoded_stride: decoded.data.len() as u64,
+                decoded_file_size: decoded.file_size,
+                data: decoded.data,
+            })
         }
     });
-    let header_buffers: Vec<Vec<u8>> = futures::future::try_join_all(fetches).await?;
+    let vol_first: Vec<VolFirstSegment> = futures::future::try_join_all(fetches).await?;
 
     // 2. Parse each volume's headers. Volume 0 must yield ≥1 FileHeader.
     //
@@ -451,8 +543,8 @@ async fn probe_rar_inner(
 
     let mut all_file_headers: Vec<(usize, FileHeader)> = Vec::new();
     let mut header_summary: Vec<String> = Vec::new();
-    for (idx, buf) in header_buffers.iter().enumerate() {
-        let headers = parse_volume_headers(buf, &nzb_passwords).map_err(|e| {
+    for (idx, vf) in vol_first.iter().enumerate() {
+        let headers = parse_volume_headers(&vf.data, &nzb_passwords).map_err(|e| {
             PreflightError::RarHeaderParse {
                 volume: idx,
                 reason: format!("{e:?}"),
@@ -545,37 +637,26 @@ async fn probe_rar_inner(
         );
     }
 
-    // 5. Build segments + chunks. Segments span all volumes in order;
-    //    chunks describe where each volume's data lives in the assembled stream.
-    let mut segments: Vec<SegmentRef> = Vec::new();
-    let mut chunks: Vec<DataChunk> = Vec::new();
-    let mut assembled_offset: u64 = 0;
-    let mut video_offset: u64 = 0;
-    for (vol_idx, data_start, data_size) in &per_volume {
-        let vol = volumes[*vol_idx];
-
-        // Append this volume's segments with cumulative assembled offsets.
-        let mut sorted: Vec<&nzb_rs::Segment> = vol.segments.iter().collect();
-        sorted.sort_by_key(|s| s.number);
-        let vol_segment_offset_start = assembled_offset;
-        for seg in sorted {
-            let bytes = seg.size as u64;
-            segments.push(SegmentRef {
-                server_index: 0,
-                message_id: seg.message_id.clone(),
-                bytes,
-                offset_in_stream: assembled_offset,
-            });
-            assembled_offset += bytes;
-        }
-
-        chunks.push(DataChunk {
-            video_start: video_offset,
-            length: *data_size,
-            assembled_start: vol_segment_offset_start + data_start,
-        });
-        video_offset += *data_size;
-    }
+    // 5. Build segments + chunks in DECODED space. Each volume's segments
+    //    cumulate the decoded stride (not the NZB encoded `<segment bytes>`),
+    //    so the assembled stream matches the real decoded concatenation and
+    //    the decoded-space `data_start`/`data_size` line up — no sparse-zero
+    //    tails. See `build_rar_layout`.
+    let geom: Vec<RarVolumeGeom> = per_volume
+        .iter()
+        .map(|(vol_idx, data_start, data_size)| {
+            let mut sorted: Vec<&nzb_rs::Segment> = volumes[*vol_idx].segments.iter().collect();
+            sorted.sort_by_key(|s| s.number);
+            RarVolumeGeom {
+                message_ids: sorted.into_iter().map(|s| s.message_id.clone()).collect(),
+                decoded_stride: vol_first[*vol_idx].decoded_stride,
+                decoded_file_size: vol_first[*vol_idx].decoded_file_size,
+                data_start: *data_start,
+                data_size: *data_size,
+            }
+        })
+        .collect();
+    let (segments, chunks, _video_total) = build_rar_layout(&geom);
 
     let layout = FileLayout {
         segments: segments.into(),
@@ -929,5 +1010,206 @@ mod tests {
         assert_eq!(segs[0].offset_in_stream, 0);
         // Last segment carries the tail; min(stride, tail) = 500_000.
         assert_eq!(segs[0].bytes, 500_000);
+    }
+
+    fn geom(
+        ids: &[&str],
+        stride: u64,
+        file_size: Option<u64>,
+        data_start: u64,
+        data_size: u64,
+    ) -> RarVolumeGeom {
+        RarVolumeGeom {
+            message_ids: ids.iter().map(|s| s.to_string()).collect(),
+            decoded_stride: stride,
+            decoded_file_size: file_size,
+            data_start,
+            data_size,
+        }
+    }
+
+    #[test]
+    fn rar_layout_spaces_segments_by_decoded_stride() {
+        // 3 parts, decoded stride 968 (the encoded <segment bytes> ~1000 must
+        // NOT be used). Volume total 2840 → last part = 2840 - 2*968 = 904.
+        let (segs, chunks, total) =
+            build_rar_layout(&[geom(&["s0", "s1", "s2"], 968, Some(2840), 50, 2790)]);
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0].offset_in_stream, 0);
+        assert_eq!(segs[0].bytes, 968);
+        assert_eq!(
+            segs[1].offset_in_stream, 968,
+            "second part must start at the decoded stride, not the encoded size"
+        );
+        assert_eq!(segs[1].bytes, 968);
+        assert_eq!(segs[2].offset_in_stream, 1936);
+        assert_eq!(segs[2].bytes, 904, "last part = file_size - (n-1)*stride");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].assembled_start, 50, "data region at decoded data_start");
+        assert_eq!(chunks[0].length, 2790);
+        assert_eq!(chunks[0].video_start, 0);
+        assert_eq!(total, 2790);
+    }
+
+    #[test]
+    fn rar_layout_multivolume_cumulates_decoded_offsets() {
+        // Two volumes, 2 parts each, stride 1000, total 1800 (last part 800).
+        let (segs, chunks, total) = build_rar_layout(&[
+            geom(&["a0", "a1"], 1000, Some(1800), 100, 1700),
+            geom(&["b0", "b1"], 1000, Some(1800), 100, 1700),
+        ]);
+        // vol0: [0,1000) [1000,1800)   vol1: [1800,2800) [2800,3600)
+        assert_eq!(segs[0].offset_in_stream, 0);
+        assert_eq!(segs[1].offset_in_stream, 1000);
+        assert_eq!(segs[1].bytes, 800);
+        assert_eq!(
+            segs[2].offset_in_stream, 1800,
+            "vol1 starts at vol0's decoded total, not its encoded total"
+        );
+        assert_eq!(segs[2].bytes, 1000);
+        assert_eq!(segs[3].offset_in_stream, 2800);
+        assert_eq!(segs[3].bytes, 800);
+        assert_eq!(chunks[0].assembled_start, 100);
+        assert_eq!(chunks[0].video_start, 0);
+        assert_eq!(chunks[1].assembled_start, 1900);
+        assert_eq!(chunks[1].video_start, 1700);
+        assert_eq!(total, 3400);
+    }
+
+    #[test]
+    fn rar_layout_falls_back_to_full_stride_without_file_size() {
+        let (segs, _c, _t) = build_rar_layout(&[geom(&["s0", "s1", "s2"], 1000, None, 0, 2800)]);
+        assert_eq!(segs[2].bytes, 1000, "no =ybegin size= → assume full last stride");
+        assert_eq!(segs[2].offset_in_stream, 2000);
+    }
+
+    #[test]
+    fn rar_layout_implausible_file_size_falls_back() {
+        // file_size < (n-1)*stride is nonsense → fall back to n*stride.
+        let (segs, _c, _t) = build_rar_layout(&[geom(&["s0", "s1", "s2"], 1000, Some(500), 0, 100)]);
+        assert_eq!(segs[2].bytes, 1000);
+    }
+
+    #[test]
+    fn rar_layout_single_part_volume_sized_to_total() {
+        let (segs, chunks, total) = build_rar_layout(&[geom(&["only"], 1000, Some(640), 50, 590)]);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].offset_in_stream, 0);
+        assert_eq!(segs[0].bytes, 640);
+        assert_eq!(chunks[0].assembled_start, 50);
+        assert_eq!(total, 590);
+    }
+
+    /// Path to the committed real-world fixture: the exact 45-volume RAR
+    /// release whose preflight 500'd in prod (nzbplanet guid
+    /// 6c1e7bbb…, 3304 segments). Captured via `t=get` so re-runs don't
+    /// depend on the indexer.
+    const RAR_FIXTURE_PATH: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/rar_multivolume.nzb");
+
+    fn parse_rar_fixture() -> Nzb {
+        let xml = std::fs::read_to_string(RAR_FIXTURE_PATH).expect("read RAR fixture");
+        Nzb::parse(&xml).expect("parse RAR fixture")
+    }
+
+    /// The fixture is detected as RAR and fans out to all 45 volumes — this
+    /// is the structural root of the slow-preflight bug: `probe_rar_inner`
+    /// fetches the first segment of every one of these before it can return
+    /// a serveable stream. Deterministic, no network.
+    #[test]
+    fn fixture_rar_release_fans_out_to_45_volumes() {
+        let nzb = parse_rar_fixture();
+        assert_eq!(pick_main_file(&nzb).unwrap(), DetectedLayout::Rar);
+        let vols = find_rar_volumes(&nzb);
+        assert_eq!(vols.len(), 45, "real release has 45 RAR volumes");
+        assert!(vols[0].name().unwrap().contains("part01.rar"));
+        assert!(vols[44].name().unwrap().contains("part45.rar"));
+    }
+
+    /// Live end-to-end repro of BOTH streaming bugs against the real release.
+    /// Gated on `CONFIG_PATH` (the addon's own config with real NNTP creds)
+    /// and `#[ignore]` so it never runs in CI. Run with:
+    ///   CONFIG_PATH=/path/to/config.toml cargo test --bin stremio-nzb-addon \
+    ///     -- --ignored --nocapture live_rar_preflight
+    ///
+    /// Bug #1 (slow TTFB): `probe_rar_inner` fetches the first segment of all
+    /// 45 volumes before returning, blocking the HTTP response long enough
+    /// that the transcoder's ffprobe times out → HTTP 500 → stream won't load.
+    ///
+    /// Bug #2 (decoded-short): RAR segment offsets are built from the NZB
+    /// `<segment bytes>` (yEnc-encoded, ~3% larger than decoded), so real
+    /// segments decode shorter than their declared layout size and leave a
+    /// sparse-zero tail that corrupts playback mid-stream.
+    #[tokio::test]
+    #[ignore = "live: needs CONFIG_PATH + real NNTP creds + network"]
+    async fn live_rar_preflight_exposes_slow_ttfb_and_decoded_short() {
+        let Ok(config_path) = std::env::var("CONFIG_PATH") else {
+            eprintln!("SKIP: CONFIG_PATH unset");
+            return;
+        };
+        let cfg = crate::config::load_from_disk(std::path::Path::new(&config_path))
+            .expect("load config")
+            .expect("config file present");
+        let urls: Vec<String> = cfg
+            .defaults
+            .nntp_servers
+            .iter()
+            .map(|s| s.server.clone())
+            .collect();
+        assert!(!urls.is_empty(), "config must define NNTP servers");
+        let nntp =
+            std::sync::Arc::new(crate::streaming::nntp::NntpPool::from_urls(urls).unwrap());
+
+        let tmp = std::env::temp_dir().join(format!("tab-live-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cache =
+            crate::streaming::disk_cache::DiskCache::new(tmp.clone(), 4 * 1024 * 1024 * 1024);
+
+        let nzb = parse_rar_fixture();
+        let vol_count = find_rar_volumes(&nzb).len();
+        eprintln!("[live] fixture has {vol_count} RAR volumes");
+
+        // ---- Bug #1: time-to-first-byte for the cold preflight.
+        let t0 = std::time::Instant::now();
+        let active = probe_rar_inner(&nzb, &nntp, &cache, "live-test-token")
+            .await
+            .expect("preflight should succeed for a live release");
+        let ttfb = t0.elapsed();
+        eprintln!("[live] RAR preflight TTFB: {ttfb:?} (fetched first segment of {vol_count} volumes)");
+
+        // ---- Bug #2: sample real segments; each should decode to exactly its
+        // declared layout size. Today they decode short (encoded > decoded).
+        let mut short = 0usize;
+        let sample = active.file_layout.segments.iter().take(8).cloned().collect::<Vec<_>>();
+        for seg in &sample {
+            let (_idx, raw) = nntp
+                .fetch_with_failover(seg.server_index, &seg.message_id)
+                .await
+                .expect("fetch segment");
+            let decoded = decode_yenc(&raw).expect("decode segment");
+            eprintln!(
+                "[live] seg {} decoded {} vs declared {}",
+                seg.message_id,
+                decoded.data.len(),
+                seg.bytes
+            );
+            if (decoded.data.len() as u64) < seg.bytes {
+                short += 1;
+            }
+        }
+        std::fs::remove_dir_all(&tmp).ok();
+
+        assert_eq!(
+            short, 0,
+            "{short}/{} sampled RAR segments decode shorter than their declared layout size \
+             → sparse-zero tails corrupt the stream (probe_rar_inner skips decoded-stride \
+             reconciliation)",
+            sample.len()
+        );
+        assert!(
+            ttfb < std::time::Duration::from_secs(4),
+            "RAR preflight TTFB {ttfb:?} exceeds 4s — blocks the HTTP response so ffprobe \
+             times out and the stream 500s; lazy per-volume header parsing should fix this"
+        );
     }
 }

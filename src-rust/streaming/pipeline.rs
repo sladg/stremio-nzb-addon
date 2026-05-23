@@ -1096,6 +1096,63 @@ mod prefetch_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// End-to-end regression for the RAR decoded-stride bug.
+    ///
+    /// A single RAR volume, three yEnc parts of decoded size 968 / 968 / 904
+    /// (volume total 2840 from `=ybegin size=`). The NZB `<segment bytes>`
+    /// would have been ~3% larger; the bug cumulated segment offsets from those
+    /// *encoded* sizes while `data_start`/`data_size` are decoded-space, so the
+    /// decoded payload left a sparse-zero gap at every part tail and every
+    /// later byte was shifted. `build_rar_layout` cumulates the decoded stride
+    /// instead, so the served bytes equal the true video.
+    #[tokio::test]
+    async fn rar_layout_serves_multisegment_volume_gap_free() {
+        use crate::streaming::preflight::{build_rar_layout, RarVolumeGeom};
+
+        let part_sizes = [968usize, 968, 904];
+        let file_size: u64 = part_sizes.iter().map(|n| *n as u64).sum(); // 2840
+
+        let mut payloads = HashMap::new();
+        let mut expected = Vec::new();
+        let mut ids = Vec::new();
+        for (i, &len) in part_sizes.iter().enumerate() {
+            let msg = format!("rarseg{i}@test");
+            let data = payload_for(i, len);
+            expected.extend_from_slice(&data);
+            payloads.insert(msg.clone(), yenc_encode(&data));
+            ids.push(msg);
+        }
+
+        // Whole volume is file data (data_start = 0); stride = first part size.
+        let geom = RarVolumeGeom {
+            message_ids: ids,
+            decoded_stride: part_sizes[0] as u64,
+            decoded_file_size: Some(file_size),
+            data_start: 0,
+            data_size: file_size,
+        };
+        let (segments, chunks, total) = build_rar_layout(&[geom]);
+        let layout = FileLayout {
+            segments: Arc::from(segments.into_boxed_slice()),
+            chunks,
+        };
+
+        let (dir, cache) = open_cache(layout.assembled_size()).await;
+        let source = MockSource::new(payloads, 1);
+        let active = make_active_stream(layout, total, cache.clone());
+
+        let stream = serve_range_stream(active, cache, source, 0, total - 1, 1, None);
+        let got = collect_stream_bytes(Box::pin(stream)).await.unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(got.len(), expected.len(), "served length must match video size");
+        assert!(
+            got == expected,
+            "RAR multi-part volume must serve the real decoded video gap-free \
+             (build_rar_layout must cumulate the decoded stride, not the encoded <segment bytes>)"
+        );
+    }
+
     #[tokio::test]
     async fn eviction_disabled_keeps_full_cache() {
         // Passing None for evict policy should preserve the legacy
